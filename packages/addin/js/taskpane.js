@@ -1143,7 +1143,7 @@
 
             const sub = document.createElement("div");
             sub.className = "item-sub";
-            sub.textContent = `${selection.sheetName}!${selection.address}`;
+            sub.textContent = formatSelectionLocation(selection);
 
             text.appendChild(title);
             text.appendChild(sub);
@@ -1254,7 +1254,7 @@
             marker.className = "marker";
             marker.style.background = selection.color;
             marker.style.top = `${calcMarkerTop(parseRowFromAddress(selection.address), maxRow, panelHeight)}px`;
-            marker.title = `${selection.userName}: ${selection.sheetName}!${selection.address}`;
+            marker.title = `${selection.userName}: ${formatSelectionLocation(selection)}`;
             marker.onclick = function () {
                 jumpToCell(selection.sheetName, selection.address);
             };
@@ -1290,9 +1290,98 @@
         return Math.max(0, Math.min(panelHeight - 6, (rowIndex / maxRow) * panelHeight));
     }
 
+    function formatSelectionLocation(selection) {
+        const fallback = `${selection.sheetName}!${selection.address}`;
+
+        try {
+            if (!isGameConfigSheet(selection.sheetName)) {
+                return fallback;
+            }
+
+            const normalized = normalizeAddress(selection.address);
+            const rowIndex = parseRowFromAddress(normalized);
+            const columnName = parseColumnFromAddress(normalized);
+            if (!rowIndex || !columnName) {
+                return fallback;
+            }
+
+            const sheet = getApp().Worksheets.Item(selection.sheetName);
+            const rowId = formatCellDisplayValue(sheet.Range(`A${rowIndex}`));
+            const rowLabel = rowId ? `id: ${rowId}` : `行号: ${rowIndex}`;
+            const fieldName = formatCellDisplayValue(sheet.Range(`${columnName}1`));
+
+            if (!fieldName) {
+                return fallback;
+            }
+
+            return `${selection.sheetName} | ${rowLabel} | ${fieldName}`;
+        } catch {
+            return fallback;
+        }
+    }
+
+    function isGameConfigSheet(sheetName) {
+        try {
+            const sheet = getApp().Worksheets.Item(sheetName);
+            return String(formatCellDisplayValue(sheet.Range("A1"))).trim().toLowerCase() === "id";
+        } catch {
+            return false;
+        }
+    }
+
+    function formatCellDisplayValue(range) {
+        if (!range) {
+            return "";
+        }
+
+        try {
+            const text = readRangeDisplayProperty(range, "Text");
+            if (isUsableCellDisplayValue(text)) {
+                return String(text).trim();
+            }
+        } catch {
+            // ignore
+        }
+
+        const value = readRangeDisplayProperty(range, "Value");
+        if (isUsableCellDisplayValue(value)) {
+            return String(value).trim();
+        }
+
+        const formula = readRangeDisplayProperty(range, "Formula");
+        if (isUsableCellDisplayValue(formula)) {
+            return String(formula).trim();
+        }
+
+        return "";
+    }
+
+    function readRangeDisplayProperty(range, propertyName) {
+        const value = range[propertyName];
+        if (typeof value === "function") {
+            return value.call(range);
+        }
+
+        return value;
+    }
+
+    function isUsableCellDisplayValue(value) {
+        if (value === undefined || value === null || typeof value === "function") {
+            return false;
+        }
+
+        const text = String(value).trim();
+        return text !== "" && !/^function\s+\w*\s*\(\)\s*\{\s*\[native code\]\s*\}$/i.test(text);
+    }
+
     function parseRowFromAddress(address) {
         const match = String(address).match(/\d+/);
         return match ? Number(match[0]) : 1;
+    }
+
+    function parseColumnFromAddress(address) {
+        const match = String(address).match(/[A-Z]+/i);
+        return match ? match[0].toUpperCase() : "";
     }
 
     function normalizeAddress(address) {
