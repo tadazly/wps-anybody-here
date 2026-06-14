@@ -1,18 +1,16 @@
 {
-	"name": "wps-anybody-here",
-	"addonType": "et",
-	"version": "0.1.0",
-	"scripts": {
-		"dev": "vite --port 3889",
-		"build": "vite build",
-		"preview": "vite preview",
-		"lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs --fix --ignore-path .gitignore",
-		"format": "prettier --write src/"
-	},
-	"description": "WPS 表格协作提醒插件：显示同表在线用户、远端选区和地址级冲突。",
-	"devDependencies": {
-		"et-jsapi-declare": "latest",
-		"vite": "^5.3.1",
-		"wpsjs": "latest"
-	}
+  "name": "wps-anybody-here",
+  "private": true,
+  "version": "0.1.0",
+  "description": "表里有人：看看表里谁在配，谁在改，谁在和你撞格子。",
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "dev:server": "pnpm --filter @wps-anybody-here/server dev",
+    "dev:addin": "pnpm --filter @wps-anybody-here/addin dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
 }

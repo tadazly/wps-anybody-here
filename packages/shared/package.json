@@ -1,0 +1,15 @@
+{
+  "name": "@wps-anybody-here/shared",
+  "version": "0.1.0",
+  "description": "Shared protocol types and utilities for 表里有人.",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}
