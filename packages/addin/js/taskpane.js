@@ -5,6 +5,7 @@
         user: "wpsAnybodyHere.user",
         repoUrl: "wpsAnybodyHere.repoUrl",
         repoRoot: "wpsAnybodyHere.repoRoot",
+        highlightRemoteCells: "wpsAnybodyHere.highlightRemoteCells",
         settingsSaved: "wpsAnybodyHere.settingsSaved",
     };
 
@@ -311,6 +312,10 @@
         return localStorage.getItem(STORAGE_KEYS.settingsSaved) === "1";
     }
 
+    function isRemoteCellHighlightEnabled() {
+        return localStorage.getItem(STORAGE_KEYS.highlightRemoteCells) !== "0";
+    }
+
     function setSettingsError(message) {
         const el = $("settingsError");
         if (!el) {
@@ -336,6 +341,7 @@
         $("repoUrlInput").value = firstRun ? "" : getRepoUrl();
         $("repoRootInput").value = firstRun ? "" : getRepoRoot();
         $("userNameInput").value = savedUser ? savedUser.userName : getWpsUserName();
+        $("highlightRemoteCellsInput").checked = isRemoteCellHighlightEnabled();
         syncColorDraftFromUser(savedUser);
         renderUserColorControls();
         modal.dataset.force = force ? "true" : "false";
@@ -362,6 +368,7 @@
         const repoUrl = normalizeRepoUrl($("repoUrlInput").value);
         const repoRoot = normalizeWorkbookPath($("repoRootInput").value.trim()).replace(/\/$/, "");
         const userName = $("userNameInput").value.trim();
+        const highlightRemoteCells = $("highlightRemoteCellsInput").checked;
 
         if (!serverUrl) {
             setSettingsError("请填写服务器 socket 地址。");
@@ -383,10 +390,12 @@
         const oldServerUrl = getServerUrl();
         const oldRepoUrl = getRepoUrl();
         const oldRepoRoot = getRepoRoot();
+        const oldHighlightRemoteCells = isRemoteCellHighlightEnabled();
 
         localStorage.setItem(STORAGE_KEYS.serverUrl, serverUrl);
         localStorage.setItem(STORAGE_KEYS.repoUrl, repoUrl);
         localStorage.setItem(STORAGE_KEYS.repoRoot, repoRoot);
+        localStorage.setItem(STORAGE_KEYS.highlightRemoteCells, highlightRemoteCells ? "1" : "0");
         localStorage.setItem(STORAGE_KEYS.settingsSaved, "1");
         $("serverUrlInput").value = serverUrl;
         $("repoUrlInput").value = repoUrl;
@@ -401,6 +410,14 @@
         $("settingsModal").classList.remove("open");
         setSettingsError("");
         log("协作设置已保存");
+
+        if (oldHighlightRemoteCells !== highlightRemoteCells) {
+            if (highlightRemoteCells) {
+                refreshHighlights();
+            } else {
+                cleanupWorkbookHighlights();
+            }
+        }
 
         if (joined) {
             if (oldRepoUrl !== repoUrl || oldRepoRoot !== repoRoot) {
@@ -2054,6 +2071,12 @@
 
     async function refreshHighlights() {
         try {
+            if (!isRemoteCellHighlightEnabled()) {
+                await clearOldHighlights();
+                deleteAllSelectionLabelShapes();
+                return;
+            }
+
             const cleared = await clearOldHighlights();
             if (!cleared) {
                 return;

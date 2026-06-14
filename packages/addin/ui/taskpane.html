@@ -260,6 +260,37 @@
             outline: 2px solid rgba(37, 99, 235, 0.14);
         }
 
+        .settings-check-field {
+            padding: 8px 0 2px;
+        }
+
+        .settings-field .settings-check-label {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            color: #334155;
+            font-size: 12px;
+            font-weight: 800;
+            line-height: 1.45;
+        }
+
+        .settings-check-label input[type="checkbox"] {
+            width: 14px;
+            min-width: 14px;
+            height: 14px;
+            margin-top: 1px;
+            padding: 0;
+            cursor: pointer;
+        }
+
+        .settings-note {
+            margin-top: 4px;
+            padding-left: 22px;
+            color: #64748b;
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
         .settings-inline-field {
             display: flex;
             align-items: stretch;
@@ -550,6 +581,14 @@
                     <button id="userColorAutoBtn" class="color-auto-btn active" type="button" title="使用自动分配颜色">自动</button>
                 </div>
                 <div id="userColorHint" class="settings-hint"></div>
+            </div>
+
+            <div class="settings-field settings-check-field">
+                <label class="settings-check-label" for="highlightRemoteCellsInput">
+                    <input id="highlightRemoteCellsInput" type="checkbox" checked>
+                    <span>高亮远端选取单元格</span>
+                </label>
+                <div class="settings-note">开启后会在表格中标记远端选取和冲突单元格，WPS 可能一直显示表格被修改；实际保存时插件会先清理协作高亮，只保存你自己做的修改。</div>
             </div>
 
             <div class="settings-actions">
