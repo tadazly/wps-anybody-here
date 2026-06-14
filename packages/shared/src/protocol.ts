@@ -33,6 +33,8 @@ export interface SelectionMsg {
     type: "selection";
     sheetName: string;
     address: string;
+    rowId?: string;
+    fieldName?: string;
     row?: number;
     col?: number;
 }
@@ -41,6 +43,8 @@ export interface CellChangeMsg {
     type: "cellChange";
     sheetName: string;
     address: string;
+    rowId?: string;
+    fieldName?: string;
     oldValue?: unknown;
     newValue: unknown;
 }
@@ -118,6 +122,8 @@ export interface SelectionInfo {
     color: string;
     sheetName: string;
     address: string;
+    rowId?: string;
+    fieldName?: string;
     updatedAt: number;
 }
 
@@ -127,6 +133,8 @@ export interface ChangeInfo {
     color: string;
     sheetName: string;
     address: string;
+    rowId?: string;
+    fieldName?: string;
     oldValue?: unknown;
     newValue: unknown;
     updatedAt: number;
@@ -136,6 +144,8 @@ export interface ConflictInfo {
     key: string;
     sheetName: string;
     address: string;
+    rowId?: string;
+    fieldName?: string;
     users: Array<{
         userId: string;
         userName: string;

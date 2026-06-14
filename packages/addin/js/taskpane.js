@@ -1266,7 +1266,7 @@
             div.className = "item clickable";
             div.title = "点击跳转到该单元格";
             div.onclick = function () {
-                jumpToCell(selection.sheetName, selection.address);
+                jumpToSelection(selection);
             };
 
             const dot = document.createElement("span");
@@ -1313,7 +1313,7 @@
             div.className = "item clickable conflict-item";
             div.title = "点击跳转到冲突单元格";
             div.onclick = function () {
-                jumpToCell(conflict.sheetName, conflict.address);
+                jumpToConflict(conflict);
             };
 
             const dot = document.createElement("span");
@@ -1323,7 +1323,7 @@
             const text = document.createElement("div");
             const title = document.createElement("div");
             title.className = "item-title";
-            title.textContent = `${conflict.sheetName}!${conflict.address}`;
+            title.textContent = formatConflictLocation(conflict);
 
             const sub = document.createElement("div");
             sub.className = "item-sub";
@@ -1387,26 +1387,36 @@
         const panelHeight = 260;
 
         for (const selection of selections) {
+            const localAddress = resolveSelectionLocalAddress(selection);
+            if (!localAddress) {
+                continue;
+            }
+
             const marker = document.createElement("div");
             marker.className = "marker";
             marker.style.background = selection.color;
-            marker.style.top = `${calcMarkerTop(parseRowFromAddress(selection.address), maxRow, panelHeight)}px`;
+            marker.style.top = `${calcMarkerTop(parseRowFromAddress(localAddress), maxRow, panelHeight)}px`;
             marker.title = `${selection.userName}: ${formatSelectionLocation(selection)}`;
             marker.onclick = function () {
-                jumpToCell(selection.sheetName, selection.address);
+                jumpToSelection(selection);
             };
             miniMap.appendChild(marker);
         }
 
         for (const conflict of conflicts) {
+            const localAddress = resolveConflictLocalAddress(conflict);
+            if (!localAddress) {
+                continue;
+            }
+
             const marker = document.createElement("div");
             marker.className = "marker";
             marker.style.background = CONFLICT_COLOR;
             marker.style.height = "6px";
-            marker.style.top = `${calcMarkerTop(parseRowFromAddress(conflict.address), maxRow, panelHeight)}px`;
-            marker.title = `冲突: ${conflict.sheetName}!${conflict.address}`;
+            marker.style.top = `${calcMarkerTop(parseRowFromAddress(localAddress), maxRow, panelHeight)}px`;
+            marker.title = `冲突: ${formatConflictLocation(conflict)}`;
             marker.onclick = function () {
-                jumpToCell(conflict.sheetName, conflict.address);
+                jumpToConflict(conflict);
             };
             miniMap.appendChild(marker);
         }
@@ -1415,10 +1425,16 @@
     function maxMarkerRow(selections, conflictsList) {
         let max = 1;
         for (const selection of selections) {
-            max = Math.max(max, parseRowFromAddress(selection.address));
+            const localAddress = resolveSelectionLocalAddress(selection);
+            if (localAddress) {
+                max = Math.max(max, parseRowFromAddress(localAddress));
+            }
         }
         for (const conflict of conflictsList) {
-            max = Math.max(max, parseRowFromAddress(conflict.address));
+            const localAddress = resolveConflictLocalAddress(conflict);
+            if (localAddress) {
+                max = Math.max(max, parseRowFromAddress(localAddress));
+            }
         }
         return max;
     }
@@ -1431,6 +1447,12 @@
         const fallback = `${selection.sheetName}!${selection.address}`;
 
         try {
+            if (selection.rowId) {
+                const existsLocally = Boolean(findGameConfigRowById(selection.sheetName, selection.rowId));
+                const idText = existsLocally ? `id: ${selection.rowId}` : `id: ${selection.rowId}(新增)`;
+                return `${selection.sheetName} | ${idText} | ${selection.fieldName || parseColumnFromAddress(selection.address) || selection.address}`;
+            }
+
             if (!isGameConfigSheet(selection.sheetName)) {
                 return fallback;
             }
@@ -1455,6 +1477,163 @@
         } catch {
             return fallback;
         }
+    }
+
+    function formatConflictLocation(conflict) {
+        if (conflict && conflict.rowId) {
+            const existsLocally = Boolean(findGameConfigRowById(conflict.sheetName, conflict.rowId));
+            const idText = existsLocally ? `id: ${conflict.rowId}` : `id: ${conflict.rowId}(新增)`;
+            return `${conflict.sheetName} | ${idText} | ${conflict.fieldName || parseColumnFromAddress(conflict.address) || conflict.address}`;
+        }
+
+        return `${conflict.sheetName}!${conflict.address}`;
+    }
+
+    function getGameConfigCellMeta(sheetName, address) {
+        try {
+            if (!isGameConfigSheet(sheetName)) {
+                return {};
+            }
+
+            const normalized = normalizeAddress(address);
+            const rowIndex = parseRowFromAddress(normalized);
+            const columnName = parseColumnFromAddress(normalized);
+            if (!rowIndex || !columnName) {
+                return {};
+            }
+
+            const sheet = getApp().Worksheets.Item(sheetName);
+            const rowId = formatCellDisplayValue(sheet.Range(`A${rowIndex}`));
+            const fieldName = formatCellDisplayValue(sheet.Range(`${columnName}1`));
+
+            return {
+                ...(rowId ? { rowId } : {}),
+                ...(fieldName ? { fieldName } : {}),
+            };
+        } catch {
+            return {};
+        }
+    }
+
+    function resolveSelectionLocalAddress(selection) {
+        if (!selection || !selection.sheetName || !selection.address) {
+            return "";
+        }
+
+        if (selection.rowId && selection.fieldName) {
+            return resolveGameConfigAddress(selection.sheetName, selection.rowId, selection.fieldName);
+        }
+
+        return normalizeAddress(selection.address);
+    }
+
+    function resolveConflictLocalAddress(conflict) {
+        if (!conflict || !conflict.sheetName || !conflict.address) {
+            return "";
+        }
+
+        if (conflict.rowId && conflict.fieldName) {
+            return resolveGameConfigAddress(conflict.sheetName, conflict.rowId, conflict.fieldName);
+        }
+
+        return normalizeAddress(conflict.address);
+    }
+
+    function resolveGameConfigAddress(sheetName, rowId, fieldName) {
+        try {
+            const rowIndex = findGameConfigRowById(sheetName, rowId);
+            const columnName = findGameConfigColumnByField(sheetName, fieldName);
+            if (!rowIndex || !columnName) {
+                return "";
+            }
+
+            return `${columnName}${rowIndex}`;
+        } catch {
+            return "";
+        }
+    }
+
+    function findGameConfigRowById(sheetName, rowId) {
+        const target = String(rowId || "").trim();
+        if (!target || !isGameConfigSheet(sheetName)) {
+            return 0;
+        }
+
+        try {
+            const sheet = getApp().Worksheets.Item(sheetName);
+            const usedRange = getSheetUsedRange(sheet);
+            const rowCount = Math.max(1, getRangeCollectionCount(usedRange, "Rows") || 1000);
+
+            for (let row = 2; row <= rowCount; row++) {
+                if (formatCellDisplayValue(sheet.Range(`A${row}`)) === target) {
+                    return row;
+                }
+            }
+        } catch {
+            // ignore
+        }
+
+        return 0;
+    }
+
+    function findGameConfigColumnByField(sheetName, fieldName) {
+        const target = String(fieldName || "").trim();
+        if (!target || !isGameConfigSheet(sheetName)) {
+            return "";
+        }
+
+        try {
+            const sheet = getApp().Worksheets.Item(sheetName);
+            const usedRange = getSheetUsedRange(sheet);
+            const colCount = Math.max(1, getRangeCollectionCount(usedRange, "Columns") || 256);
+
+            for (let col = 1; col <= colCount; col++) {
+                const columnName = columnIndexToName(col);
+                if (formatCellDisplayValue(sheet.Range(`${columnName}1`)) === target) {
+                    return columnName;
+                }
+            }
+        } catch {
+            // ignore
+        }
+
+        return "";
+    }
+
+    function getSheetUsedRange(sheet) {
+        try {
+            if (sheet.UsedRange) {
+                return typeof sheet.UsedRange === "function" ? sheet.UsedRange() : sheet.UsedRange;
+            }
+        } catch {
+            // ignore
+        }
+
+        return null;
+    }
+
+    function getRangeCollectionCount(range, propertyName) {
+        try {
+            const collection = readRangeDisplayProperty(range, propertyName);
+            const count = readRangeDisplayProperty(collection, "Count");
+            const number = Number(count);
+            return Number.isFinite(number) ? number : 0;
+        } catch {
+            return 0;
+        }
+    }
+
+    function columnIndexToName(index) {
+        let value = Number(index);
+        let name = "";
+
+        while (value > 0) {
+            const remainder = (value - 1) % 26;
+            name = String.fromCharCode(65 + remainder) + name;
+            value = Math.floor((value - 1) / 26);
+        }
+
+        return name;
     }
 
     function isGameConfigSheet(sheetName) {
@@ -1668,10 +1847,13 @@
                 return;
             }
 
+            const sheetName = getSheetName(sheet);
+            const meta = getGameConfigCellMeta(sheetName, address);
             send({
                 type: "selection",
-                sheetName: getSheetName(sheet),
+                sheetName,
                 address,
+                ...meta,
             });
         }, SELECTION_THROTTLE_MS);
     }
@@ -1693,10 +1875,14 @@
             return;
         }
 
+        const sheetName = getSheetName(sheet);
+        const meta = getGameConfigCellMeta(sheetName, address);
+
         send({
             type: "cellChange",
-            sheetName: getSheetName(sheet),
+            sheetName,
             address,
+            ...meta,
             newValue: getRangeValue(range),
         });
     }
@@ -1732,16 +1918,36 @@
         }
     }
 
+    function jumpToSelection(selection) {
+        const address = resolveSelectionLocalAddress(selection);
+        if (!address) {
+            log(`远端选区在本地不存在：${formatSelectionLocation(selection)}`);
+            return;
+        }
+
+        jumpToCell(selection.sheetName, address);
+    }
+
+    function jumpToConflict(conflict) {
+        const address = resolveConflictLocalAddress(conflict);
+        if (!address) {
+            log(`冲突单元格在本地不存在：${formatConflictLocation(conflict)}`);
+            return;
+        }
+
+        jumpToCell(conflict.sheetName, address);
+    }
+
     async function refreshHighlights() {
         try {
             await clearOldHighlights();
 
             for (const selection of remoteSelections.values()) {
-                await highlightSelectionCell(selection.sheetName, selection.address, selection.color, selection.userName);
+                await highlightSelectionCell(selection);
             }
 
             for (const conflict of conflicts) {
-                await highlightConflictCell(conflict.sheetName, conflict.address);
+                await highlightConflictCell(conflict);
             }
         } catch (err) {
             console.error("refreshHighlights failed", err);
@@ -1749,35 +1955,37 @@
         }
     }
 
-    async function highlightSelectionCell(sheetName, address, color, userName) {
+    async function highlightSelectionCell(selection) {
+        const address = resolveSelectionLocalAddress(selection);
         if (!isManageableAddress(address)) {
             return;
         }
 
         const app = getApp();
-        const sheet = app.Worksheets.Item(sheetName);
+        const sheet = app.Worksheets.Item(selection.sheetName);
         const range = sheet.Range(address);
-        const key = `${sheetName}!${address}`;
+        const key = `${selection.sheetName}!${address}`;
 
         const state = rememberHighlightState(key, range);
 
         try {
-            applyRangeBorder(range, color, XL_BORDER_WEIGHT_MEDIUM);
-            addSelectionLabel(sheet, range, userName, color, state);
+            applyRangeBorder(range, selection.color, XL_BORDER_WEIGHT_MEDIUM);
+            addSelectionLabel(sheet, range, selection.userName, selection.color, state);
         } catch (err) {
             console.error("highlightSelectionCell failed", err);
         }
     }
 
-    async function highlightConflictCell(sheetName, address) {
+    async function highlightConflictCell(conflict) {
+        const address = resolveConflictLocalAddress(conflict);
         if (!isManageableAddress(address)) {
             return;
         }
 
         const app = getApp();
-        const sheet = app.Worksheets.Item(sheetName);
+        const sheet = app.Worksheets.Item(conflict.sheetName);
         const range = sheet.Range(address);
-        const key = `${sheetName}!${address}`;
+        const key = `${conflict.sheetName}!${address}`;
 
         rememberHighlightState(key, range);
 

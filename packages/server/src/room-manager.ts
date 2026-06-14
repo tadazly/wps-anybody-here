@@ -17,6 +17,14 @@ function makeCellKey(sheetName: string, address: string) {
     return `${sheetName}::${address}`;
 }
 
+function makeEditKey(sheetName: string, address: string, rowId?: string, fieldName?: string) {
+    if (rowId && fieldName) {
+        return `${sheetName}::id:${rowId}::field:${fieldName}`;
+    }
+
+    return makeCellKey(sheetName, address);
+}
+
 interface DashboardUser {
     userId: string;
     userName: string;
@@ -350,6 +358,8 @@ export class RoomManager {
     private handleSelection(client: ClientInfo, msg: SelectionMsg) {
         const sheetName = this.normalizeText(msg.sheetName);
         const address = this.normalizeText(msg.address);
+        const rowId = this.normalizeText(msg.rowId);
+        const fieldName = this.normalizeText(msg.fieldName);
 
         if (!sheetName || !address) {
             this.send(client.ws, { type: "error", message: "sheetName and address are required" });
@@ -368,6 +378,8 @@ export class RoomManager {
             color: client.color,
             sheetName,
             address,
+            ...(rowId ? { rowId } : {}),
+            ...(fieldName ? { fieldName } : {}),
             updatedAt: Date.now(),
         };
 
@@ -383,6 +395,8 @@ export class RoomManager {
     private handleCellChange(client: ClientInfo, msg: CellChangeMsg) {
         const sheetName = this.normalizeText(msg.sheetName);
         const address = this.normalizeText(msg.address);
+        const rowId = this.normalizeText(msg.rowId);
+        const fieldName = this.normalizeText(msg.fieldName);
 
         if (!sheetName || !address) {
             this.send(client.ws, { type: "error", message: "sheetName and address are required" });
@@ -395,7 +409,7 @@ export class RoomManager {
         }
 
         const room = this.getRoom(client.roomId);
-        const key = makeCellKey(sheetName, address);
+        const key = makeEditKey(sheetName, address, rowId, fieldName);
         const now = Date.now();
         const change: ChangeInfo = {
             userId: client.userId,
@@ -403,6 +417,8 @@ export class RoomManager {
             color: client.color,
             sheetName,
             address,
+            ...(rowId ? { rowId } : {}),
+            ...(fieldName ? { fieldName } : {}),
             oldValue: msg.oldValue,
             newValue: msg.newValue,
             updatedAt: now,
@@ -492,6 +508,8 @@ export class RoomManager {
                 key,
                 sheetName: first.sheetName,
                 address: first.address,
+                ...(first.rowId ? { rowId: first.rowId } : {}),
+                ...(first.fieldName ? { fieldName: first.fieldName } : {}),
                 users: Array.from(latestByUser.values()).map(item => ({
                     userId: item.userId,
                     userName: item.userName,
