@@ -27,6 +27,26 @@
     const AUTO_JOIN_DELAY_MS = 500;
     const AUTO_JOIN_RETRY_MS = 2000;
     const CONFLICT_COLOR = "#ff4d4f";
+    const CONFLICT_FILL_COLOR = "#fde8ea";
+    const CONFLICT_BORDER_COLOR = "#ff0000";
+    const BORDER_EDGE_INDEXES = [7, 8, 9, 10];
+    const SELECTION_LABEL_PREFIX = "AnybodyHereSelectionLabel_";
+    const SELECTION_LABEL_MAX_HEIGHT = 9;
+    const SELECTION_LABEL_MIN_HEIGHT = 5;
+    const SELECTION_LABEL_MAX_WIDTH = 86;
+    const SELECTION_LABEL_MIN_WIDTH = 12;
+    const SELECTION_LABEL_FONT_SIZE = 6;
+    const MSO_TEXT_ORIENTATION_HORIZONTAL = 1;
+    const MSO_ALIGN_CENTER = 2;
+    const MSO_ANCHOR_MIDDLE = 3;
+    const XL_H_ALIGN_CENTER = -4108;
+    const XL_V_ALIGN_CENTER = -4108;
+    const XL_COLOR_INDEX_NONE = -4142;
+    const XL_LINE_STYLE_NONE = -4142;
+    const XL_LINE_STYLE_CONTINUOUS = 1;
+    const XL_PATTERN_SOLID = 1;
+    const XL_BORDER_WEIGHT_THIN = 2;
+    const XL_BORDER_WEIGHT_MEDIUM = -4138;
 
     const roomConnections = new Map();
     let reconnectCountdownTimer = null;
@@ -47,7 +67,7 @@
     let conflicts = [];
 
     const remoteSelections = new Map();
-    const originalColors = new Map();
+    const originalHighlights = new Map();
     const recentToastMap = new Map();
 
     function $(id) {
@@ -1407,6 +1427,7 @@
 
         if (selectionTimer) {
             window.clearTimeout(selectionTimer);
+            selectionTimer = null;
         }
 
         selectionTimer = window.setTimeout(function () {
@@ -1490,11 +1511,11 @@
             await clearOldHighlights();
 
             for (const selection of remoteSelections.values()) {
-                await highlightCell(selection.sheetName, selection.address, selection.color);
+                await highlightSelectionCell(selection.sheetName, selection.address, selection.color, selection.userName);
             }
 
             for (const conflict of conflicts) {
-                await highlightCell(conflict.sheetName, conflict.address, CONFLICT_COLOR);
+                await highlightConflictCell(conflict.sheetName, conflict.address);
             }
         } catch (err) {
             console.error("refreshHighlights failed", err);
@@ -1502,7 +1523,7 @@
         }
     }
 
-    async function highlightCell(sheetName, address, color) {
+    async function highlightSelectionCell(sheetName, address, color, userName) {
         if (!isManageableAddress(address)) {
             return;
         }
@@ -1512,27 +1533,43 @@
         const range = sheet.Range(address);
         const key = `${sheetName}!${address}`;
 
-        if (!originalColors.has(key)) {
-            try {
-                originalColors.set(key, range.Interior.Color || null);
-            } catch {
-                originalColors.set(key, null);
-            }
-        }
+        const state = rememberHighlightState(key, range);
 
         try {
-            range.Interior.Color = color;
+            applyRangeBorder(range, color, XL_BORDER_WEIGHT_MEDIUM);
+            addSelectionLabel(sheet, range, userName, color, state);
         } catch (err) {
-            console.error("highlightCell failed", err);
+            console.error("highlightSelectionCell failed", err);
+        }
+    }
+
+    async function highlightConflictCell(sheetName, address) {
+        if (!isManageableAddress(address)) {
+            return;
+        }
+
+        const app = getApp();
+        const sheet = app.Worksheets.Item(sheetName);
+        const range = sheet.Range(address);
+        const key = `${sheetName}!${address}`;
+
+        rememberHighlightState(key, range);
+
+        try {
+            range.Interior.Pattern = XL_PATTERN_SOLID;
+            range.Interior.Color = cssHexToWpsColor(CONFLICT_FILL_COLOR);
+            applyRangeBorder(range, CONFLICT_BORDER_COLOR, XL_BORDER_WEIGHT_MEDIUM);
+        } catch (err) {
+            console.error("highlightConflictCell failed", err);
         }
     }
 
     async function clearOldHighlights() {
         const app = getApp();
 
-        for (const entry of originalColors.entries()) {
+        for (const entry of originalHighlights.entries()) {
             const key = entry[0];
-            const color = entry[1];
+            const state = entry[1];
             const sep = key.lastIndexOf("!");
             const sheetName = key.slice(0, sep);
             const address = key.slice(sep + 1);
@@ -1544,13 +1581,340 @@
             try {
                 const sheet = app.Worksheets.Item(sheetName);
                 const range = sheet.Range(address);
-                range.Interior.Color = color || "#ffffff";
+                restoreRangeHighlight(range, state);
             } catch {
                 // ignore; sheet or cell may have disappeared
             }
         }
 
-        originalColors.clear();
+        originalHighlights.clear();
+    }
+
+    function rememberHighlightState(key, range) {
+        if (originalHighlights.has(key)) {
+            return originalHighlights.get(key);
+        }
+
+        const state = captureRangeHighlight(range);
+        originalHighlights.set(key, state);
+        return state;
+    }
+
+    function captureRangeHighlight(range) {
+        const state = {
+            interior: {},
+            borders: [],
+            labels: [],
+        };
+
+        try {
+            state.interior = captureInteriorState(range.Interior);
+        } catch {
+            // ignore
+        }
+
+        for (const index of BORDER_EDGE_INDEXES) {
+            const border = getRangeBorder(range, index);
+            state.borders.push({
+                index,
+                lineStyle: readWpsProperty(border, "LineStyle"),
+                weight: readWpsProperty(border, "Weight"),
+                color: readWpsProperty(border, "Color"),
+                colorIndex: readWpsProperty(border, "ColorIndex"),
+            });
+        }
+
+        return state;
+    }
+
+    function captureInteriorState(interior) {
+        return {
+            color: readWpsProperty(interior, "Color"),
+            colorIndex: readWpsProperty(interior, "ColorIndex"),
+            pattern: readWpsProperty(interior, "Pattern"),
+        };
+    }
+
+    function restoreRangeHighlight(range, state) {
+        if (!state) {
+            return;
+        }
+
+        deleteSelectionLabels(state);
+
+        try {
+            restoreInterior(range.Interior, state.interior);
+        } catch {
+            // ignore
+        }
+
+        for (const borderState of state.borders || []) {
+            const border = getRangeBorder(range, borderState.index);
+            restoreBorder(border, borderState);
+        }
+    }
+
+    function restoreInterior(interior, state) {
+        if (!interior || !state) {
+            return;
+        }
+
+        if (state.colorIndex === XL_COLOR_INDEX_NONE) {
+            writeWpsProperty(interior, "ColorIndex", XL_COLOR_INDEX_NONE);
+            return;
+        }
+
+        writeWpsProperty(interior, "Pattern", state.pattern);
+        writeWpsProperty(interior, "ColorIndex", state.colorIndex);
+        writeWpsProperty(interior, "Color", state.color);
+    }
+
+    function restoreBorder(border, state) {
+        if (!border || !state) {
+            return;
+        }
+
+        writeWpsProperty(border, "LineStyle", state.lineStyle);
+
+        if (state.lineStyle === XL_LINE_STYLE_NONE) {
+            return;
+        }
+
+        writeWpsProperty(border, "Weight", state.weight);
+        writeWpsProperty(border, "ColorIndex", state.colorIndex);
+        writeWpsProperty(border, "Color", state.color);
+    }
+
+    function addSelectionLabel(sheet, range, userName, color, state) {
+        if (!state || !userName) {
+            return;
+        }
+
+        const shape = createSelectionLabelShape(sheet, range, userName, color, state.labels.length);
+        if (shape) {
+            state.labels.push(shape);
+        }
+    }
+
+    function createSelectionLabelShape(sheet, range, userName, color, index) {
+        try {
+            const shapes = sheet.Shapes;
+            if (!shapes || typeof shapes.AddTextbox !== "function") {
+                return null;
+            }
+
+            const text = compactLabelText(userName);
+            const left = Number(range.Left || 0) + 1;
+            const labelHeight = calcSelectionLabelHeight(range);
+            const top = Number(range.Top || 0) + 0.5 + index * (labelHeight + 1);
+            const cellWidth = Math.max(SELECTION_LABEL_MIN_WIDTH, Number(range.Width || SELECTION_LABEL_MAX_WIDTH) - 2);
+            const width = calcSelectionLabelWidth(text, cellWidth);
+            const shape = shapes.AddTextbox(MSO_TEXT_ORIENTATION_HORIZONTAL, left, top, width, labelHeight);
+            const wpsColor = cssHexToWpsColor(color);
+
+            writeWpsProperty(shape, "Name", `${SELECTION_LABEL_PREFIX}${Date.now()}_${index}`);
+            setShapeText(shape, text);
+            setShapeFill(shape, wpsColor);
+            setShapeLine(shape, wpsColor);
+
+            return shape;
+        } catch (err) {
+            console.error("createSelectionLabelShape failed", err);
+            return null;
+        }
+    }
+
+    function calcSelectionLabelHeight(range) {
+        const cellHeight = Number(range.Height || SELECTION_LABEL_MAX_HEIGHT * 3);
+        const maxHeight = Math.max(1, cellHeight / 3);
+        return Math.min(SELECTION_LABEL_MAX_HEIGHT, Math.max(SELECTION_LABEL_MIN_HEIGHT, maxHeight));
+    }
+
+    function calcSelectionLabelWidth(text, cellWidth) {
+        let estimate = 4;
+
+        for (const char of String(text || "")) {
+            estimate += /[ -~]/.test(char) ? 2.2 : 4.8;
+        }
+
+        return Math.min(SELECTION_LABEL_MAX_WIDTH, Math.max(SELECTION_LABEL_MIN_WIDTH, Math.min(cellWidth, estimate)));
+    }
+
+    function compactLabelText(value) {
+        const text = String(value || "").trim();
+        if (text.length <= 8) {
+            return text;
+        }
+
+        return `${text.slice(0, 7)}...`;
+    }
+
+    function setShapeText(shape, text) {
+        try {
+            if (shape.TextFrame2 && shape.TextFrame2.TextRange) {
+                shape.TextFrame2.TextRange.Text = text;
+                setTextRangeFont(shape.TextFrame2.TextRange.Font);
+                if (shape.TextFrame2.TextRange.ParagraphFormat) {
+                    shape.TextFrame2.TextRange.ParagraphFormat.Alignment = MSO_ALIGN_CENTER;
+                }
+                writeWpsProperty(shape.TextFrame2, "VerticalAnchor", MSO_ANCHOR_MIDDLE);
+                writeWpsProperty(shape.TextFrame2, "MarginLeft", 0);
+                writeWpsProperty(shape.TextFrame2, "MarginRight", 0);
+                writeWpsProperty(shape.TextFrame2, "MarginTop", 0);
+                writeWpsProperty(shape.TextFrame2, "MarginBottom", 0);
+            }
+        } catch {
+            // ignore
+        }
+
+        try {
+            if (shape.TextFrame) {
+                const characters = typeof shape.TextFrame.Characters === "function"
+                    ? shape.TextFrame.Characters()
+                    : shape.TextFrame.Characters;
+                if (characters) {
+                    characters.Text = text;
+                    setTextRangeFont(characters.Font);
+                }
+                writeWpsProperty(shape.TextFrame, "HorizontalAlignment", XL_H_ALIGN_CENTER);
+                writeWpsProperty(shape.TextFrame, "VerticalAlignment", XL_V_ALIGN_CENTER);
+                writeWpsProperty(shape.TextFrame, "MarginLeft", 0);
+                writeWpsProperty(shape.TextFrame, "MarginRight", 0);
+                writeWpsProperty(shape.TextFrame, "MarginTop", 0);
+                writeWpsProperty(shape.TextFrame, "MarginBottom", 0);
+            }
+        } catch {
+            // ignore
+        }
+    }
+
+    function setTextRangeFont(font) {
+        if (!font) {
+            return;
+        }
+
+        writeWpsProperty(font, "Size", SELECTION_LABEL_FONT_SIZE);
+        writeWpsProperty(font, "Bold", true);
+        writeWpsProperty(font, "Color", cssHexToWpsColor("#ffffff"));
+    }
+
+    function setShapeFill(shape, color) {
+        try {
+            if (shape.Fill) {
+                if (typeof shape.Fill.Visible !== "undefined") {
+                    shape.Fill.Visible = true;
+                }
+                if (shape.Fill.ForeColor) {
+                    shape.Fill.ForeColor.RGB = color;
+                } else {
+                    shape.Fill.Color = color;
+                }
+            }
+        } catch {
+            // ignore
+        }
+    }
+
+    function setShapeLine(shape, color) {
+        try {
+            if (shape.Line) {
+                if (shape.Line.ForeColor) {
+                    shape.Line.ForeColor.RGB = color;
+                } else {
+                    shape.Line.Color = color;
+                }
+                writeWpsProperty(shape.Line, "Weight", 0.75);
+            }
+        } catch {
+            // ignore
+        }
+    }
+
+    function deleteSelectionLabels(state) {
+        for (const shape of state.labels || []) {
+            try {
+                if (shape && typeof shape.Delete === "function") {
+                    shape.Delete();
+                }
+            } catch {
+                // ignore
+            }
+        }
+
+        state.labels = [];
+    }
+
+    function applyRangeBorder(range, color, weight) {
+        const wpsColor = cssHexToWpsColor(color);
+        const borderWeight = weight || XL_BORDER_WEIGHT_THIN;
+
+        for (const index of BORDER_EDGE_INDEXES) {
+            const border = getRangeBorder(range, index);
+            if (!border) {
+                continue;
+            }
+
+            border.LineStyle = XL_LINE_STYLE_CONTINUOUS;
+            border.Weight = borderWeight;
+            border.Color = wpsColor;
+        }
+    }
+
+    function getRangeBorder(range, index) {
+        try {
+            const borders = range.Borders;
+            if (!borders) {
+                return null;
+            }
+
+            if (typeof borders.Item === "function") {
+                return borders.Item(index);
+            }
+
+            if (typeof borders === "function") {
+                return borders(index);
+            }
+        } catch {
+            // ignore
+        }
+
+        return null;
+    }
+
+    function readWpsProperty(target, propertyName) {
+        if (!target) {
+            return undefined;
+        }
+
+        try {
+            return target[propertyName];
+        } catch {
+            return undefined;
+        }
+    }
+
+    function writeWpsProperty(target, propertyName, value) {
+        if (!target || value === undefined || value === null) {
+            return;
+        }
+
+        try {
+            target[propertyName] = value;
+        } catch {
+            // ignore
+        }
+    }
+
+    function cssHexToWpsColor(color) {
+        let normalized = String(color || "").replace("#", "").trim();
+        if (!/^[0-9a-f]{6}$/i.test(normalized)) {
+            normalized = USER_COLORS[0].replace("#", "");
+        }
+
+        const red = parseInt(normalized.slice(0, 2), 16);
+        const green = parseInt(normalized.slice(2, 4), 16);
+        const blue = parseInt(normalized.slice(4, 6), 16);
+        return red + green * 256 + blue * 65536;
     }
 
     function initControls() {
