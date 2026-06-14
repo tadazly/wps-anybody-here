@@ -602,6 +602,7 @@
     }
 
     function leaveRoom() {
+        cleanupWorkbookHighlights();
         manuallyClosed = true;
         joined = false;
 
@@ -625,7 +626,7 @@
         renderUsers([]);
         renderSelections();
         renderConflicts();
-        refreshHighlights();
+        cleanupWorkbookHighlights();
 
         setServerStatus("offline", "已离开协作房间");
         log("已离开协作房间");
@@ -651,7 +652,7 @@
         renderUsers([]);
         renderSelections();
         renderConflicts();
-        refreshHighlights();
+        cleanupWorkbookHighlights();
         syncOpenWorkbooks();
     }
 
@@ -1653,12 +1654,44 @@
     function getRangeCollectionCount(range, propertyName) {
         try {
             const collection = readRangeDisplayProperty(range, propertyName);
+            return readCollectionCount(collection);
+        } catch {
+            return 0;
+        }
+    }
+
+    function readCollectionCount(collection) {
+        try {
             const count = readRangeDisplayProperty(collection, "Count");
             const number = Number(count);
             return Number.isFinite(number) ? number : 0;
         } catch {
             return 0;
         }
+    }
+
+    function getCollectionItem(collection, index) {
+        if (!collection) {
+            return null;
+        }
+
+        try {
+            if (typeof collection.Item === "function") {
+                return collection.Item(index);
+            }
+        } catch {
+            // ignore
+        }
+
+        try {
+            if (typeof collection === "function") {
+                return collection(index);
+            }
+        } catch {
+            // ignore
+        }
+
+        return null;
     }
 
     function columnIndexToName(index) {
@@ -1836,6 +1869,7 @@
             app.ApiEvent.AddApiEventListener("WorkbookOpen", onWorkbookListChanged);
             app.ApiEvent.AddApiEventListener("NewWorkbook", onWorkbookListChanged);
             app.ApiEvent.AddApiEventListener("WorkbookBeforeClose", onWorkbookBeforeClose);
+            app.ApiEvent.AddApiEventListener("WorkbookBeforeSave", onWorkbookBeforeSave);
             eventsBound = true;
             log("已绑定 WPS 工作簿、选区和修改事件");
         } catch (err) {
@@ -1856,6 +1890,7 @@
             app.ApiEvent.RemoveApiEventListener("WorkbookOpen", onWorkbookListChanged);
             app.ApiEvent.RemoveApiEventListener("NewWorkbook", onWorkbookListChanged);
             app.ApiEvent.RemoveApiEventListener("WorkbookBeforeClose", onWorkbookBeforeClose);
+            app.ApiEvent.RemoveApiEventListener("WorkbookBeforeSave", onWorkbookBeforeSave);
         } catch {
             // ignore
         }
@@ -1926,10 +1961,8 @@
     }
 
     function onWorkbookBeforeClose() {
-        onWorkbookListChanged();
-    }
+        cleanupWorkbookHighlights();
 
-    function onWorkbookListChanged() {
         if (!joined) {
             return;
         }
@@ -1937,6 +1970,32 @@
         window.setTimeout(function () {
             try {
                 syncOpenWorkbooks();
+            } catch (err) {
+                log(`同步表格房间失败：${err.message || err}`);
+            }
+        }, 100);
+    }
+
+    function onWorkbookBeforeSave() {
+        cleanupWorkbookHighlights();
+
+        if (joined) {
+            window.setTimeout(refreshHighlights, 1000);
+        }
+    }
+
+    function onWorkbookListChanged() {
+        cleanupWorkbookHighlights();
+
+        if (!joined) {
+            return;
+        }
+
+        window.setTimeout(function () {
+            try {
+                syncOpenWorkbooks();
+                renderActiveRoomState();
+                refreshHighlights();
             } catch (err) {
                 log(`同步表格房间失败：${err.message || err}`);
             }
@@ -2061,6 +2120,11 @@
         }
 
         originalHighlights.clear();
+    }
+
+    function cleanupWorkbookHighlights() {
+        clearOldHighlights();
+        deleteAllSelectionLabelShapes();
     }
 
     function rememberHighlightState(key, range) {
@@ -2368,6 +2432,55 @@
         state.labels = [];
     }
 
+    function deleteAllSelectionLabelShapes() {
+        try {
+            const sheets = getApp().Worksheets;
+            const count = readCollectionCount(sheets);
+
+            for (let index = 1; index <= count; index++) {
+                const sheet = getCollectionItem(sheets, index);
+                deleteSelectionLabelShapesOnSheet(sheet);
+            }
+        } catch {
+            // ignore; best-effort cleanup before saving/opening
+        }
+    }
+
+    function deleteSelectionLabelShapesOnSheet(sheet) {
+        if (!sheet) {
+            return;
+        }
+
+        try {
+            const shapes = sheet.Shapes;
+            const count = readCollectionCount(shapes);
+
+            for (let index = count; index >= 1; index--) {
+                const shape = getCollectionItem(shapes, index);
+                if (isSelectionLabelShape(shape)) {
+                    deleteShape(shape);
+                }
+            }
+        } catch {
+            // ignore
+        }
+    }
+
+    function isSelectionLabelShape(shape) {
+        const name = readWpsProperty(shape, "Name");
+        return typeof name === "string" && name.indexOf(SELECTION_LABEL_PREFIX) === 0;
+    }
+
+    function deleteShape(shape) {
+        try {
+            if (shape && typeof shape.Delete === "function") {
+                shape.Delete();
+            }
+        } catch {
+            // ignore
+        }
+    }
+
     function applyRangeBorder(range, color, weight) {
         const wpsColor = cssHexToWpsColor(color);
         const borderWeight = weight || XL_BORDER_WEIGHT_THIN;
@@ -2517,6 +2630,8 @@
         renderUsers([]);
         renderSelections();
         renderConflicts();
+
+        window.setTimeout(cleanupWorkbookHighlights, 0);
 
         if (settingsSaved) {
             window.setTimeout(autoJoinRoom, AUTO_JOIN_DELAY_MS);
