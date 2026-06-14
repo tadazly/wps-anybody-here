@@ -41,9 +41,9 @@ version/military.xlsx
 ## 开发
 
 ```bash
-pnpm install
-pnpm --filter @wps-anybody-here/addin dev
-pnpm --filter @wps-anybody-here/addin build
+npm install
+npm run dev --workspace @wps-anybody-here/addin
+npm run build --workspace @wps-anybody-here/addin
 ```
 
 打包后资源会输出到 `dist/`。WPS 加载项仍使用 wpsjs 模板的入口结构：

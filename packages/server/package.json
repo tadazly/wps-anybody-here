@@ -14,7 +14,7 @@
   "license": "ISC",
   "description": "Presence and conflict WebSocket server for 表里有人.",
   "dependencies": {
-    "@wps-anybody-here/shared": "workspace:*",
+    "@wps-anybody-here/shared": "file:../shared",
     "ws": "^8.21.0"
   },
   "devDependencies": {

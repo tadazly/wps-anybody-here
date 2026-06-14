@@ -5,15 +5,15 @@
 ## 启动
 
 ```bash
-pnpm install
-pnpm --filter @wps-anybody-here/server build
-pnpm --filter @wps-anybody-here/server start
+npm install
+npm run build --workspace @wps-anybody-here/server
+npm run start --workspace @wps-anybody-here/server
 ```
 
 默认端口是 `18080`。可以用环境变量改端口：
 
 ```bash
-PORT=18080 pnpm --filter @wps-anybody-here/server start
+PORT=18080 npm run start --workspace @wps-anybody-here/server
 ```
 
 健康检查：

@@ -270,11 +270,11 @@ Recommendation:
 - Keep one public GitHub repository at the workspace root.
 - Push root-level docs, add-in, server, and shared package together.
 
-## 14. Monorepo With pnpm Workspace
+## 14. Monorepo With npm Workspace
 
 Decision:
 
-- Use one repository with `pnpm-workspace.yaml`.
+- Use one repository with npm workspaces.
 - Package layout:
   - `@wps-anybody-here/addin`
   - `@wps-anybody-here/server`
@@ -285,12 +285,13 @@ Reason:
 - The add-in and server protocol are tightly coupled.
 - Early iterations frequently change both sides together.
 - A shared package prevents protocol type drift.
+- npm has a lower setup burden for public users because it ships with Node.js.
 
 Implications:
 
 - Prefer root commands:
-  - `pnpm dev:server`
-  - `pnpm dev:addin`
-  - `pnpm build`
-  - `pnpm typecheck`
+  - `npm run dev:server`
+  - `npm run dev:addin`
+  - `npm run build`
+  - `npm run typecheck`
 - Put new protocol fields in `packages/shared/src/protocol.ts` first.
