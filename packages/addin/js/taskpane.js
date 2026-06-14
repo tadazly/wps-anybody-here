@@ -63,6 +63,8 @@
     let workbookName = "";
     let workbookFullName = "";
     let myUser = null;
+    let pendingColorMode = "auto";
+    let pendingCustomColor = "";
     let currentUsers = [];
     let conflicts = [];
 
@@ -102,6 +104,48 @@
         return USER_COLORS[hash % USER_COLORS.length];
     }
 
+    function normalizeHexColor(value) {
+        const normalized = String(value || "").trim();
+        return /^#[0-9a-f]{6}$/i.test(normalized) ? normalized.toUpperCase() : "";
+    }
+
+    function resolveUserColor(userId, colorMode, customColor) {
+        const custom = normalizeHexColor(customColor);
+        if (colorMode === "custom" && custom) {
+            return custom;
+        }
+
+        return colorFromSeed(userId);
+    }
+
+    function makeUser(userId, userName, colorMode, customColor) {
+        const normalizedMode = colorMode === "custom" && normalizeHexColor(customColor) ? "custom" : "auto";
+        const normalizedCustomColor = normalizedMode === "custom" ? normalizeHexColor(customColor) : "";
+
+        return {
+            userId,
+            userName,
+            colorMode: normalizedMode,
+            customColor: normalizedCustomColor,
+            color: resolveUserColor(userId, normalizedMode, normalizedCustomColor),
+        };
+    }
+
+    function persistUser(user, options) {
+        localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
+        myUser = user;
+        syncColorDraftFromUser(user);
+
+        if (!options || options.updateNameInput !== false) {
+            const input = $("userNameInput");
+            if (input) {
+                input.value = user.userName;
+            }
+        }
+
+        renderUserColorControls();
+    }
+
     function createUserId() {
         const randomPart = Math.floor(Math.random() * 0xffffffff).toString(16);
         return `local:${Date.now().toString(16)}${randomPart}`;
@@ -111,11 +155,9 @@
         try {
             const saved = JSON.parse(localStorage.getItem(STORAGE_KEYS.user) || "null");
             if (saved && saved.userId && saved.userName) {
-                return {
-                    userId: saved.userId,
-                    userName: saved.userName,
-                    color: saved.color || colorFromSeed(saved.userId),
-                };
+                const customColor = normalizeHexColor(saved.customColor || "");
+                const colorMode = saved.colorMode === "custom" && customColor ? "custom" : "auto";
+                return makeUser(saved.userId, saved.userName, colorMode, customColor);
             }
         } catch {
             // ignore
@@ -124,7 +166,7 @@
         return null;
     }
 
-    function saveUserName(name) {
+    function saveUserName(name, colorOptions) {
         const userName = name.trim();
         if (!userName) {
             alert("请先填写你的名字，其他人会用这个名字识别你。");
@@ -133,21 +175,81 @@
 
         const current = myUser || loadUser();
         const userId = current && current.userId ? current.userId : createUserId();
-        const user = {
-            userId,
-            userName,
-            color: colorFromSeed(userId),
-        };
+        const colorMode = colorOptions && colorOptions.colorMode ? colorOptions.colorMode : pendingColorMode;
+        const customColor = colorOptions && Object.prototype.hasOwnProperty.call(colorOptions, "customColor")
+            ? colorOptions.customColor
+            : pendingCustomColor;
+        const user = makeUser(userId, userName, colorMode, customColor);
 
         const oldName = current && current.userName ? current.userName : "";
-        localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
-        myUser = user;
-        $("userNameInput").value = userName;
+        persistUser(user);
 
         if (oldName !== userName) {
             log(`当前身份：${userName}`);
         }
 
+        return user;
+    }
+
+    function syncColorDraftFromUser(user) {
+        pendingColorMode = user && user.colorMode === "custom" ? "custom" : "auto";
+        pendingCustomColor = user && user.customColor ? normalizeHexColor(user.customColor) : "";
+    }
+
+    function getColorDraftOptions() {
+        return {
+            colorMode: pendingColorMode,
+            customColor: pendingCustomColor,
+        };
+    }
+
+    function getColorPreview() {
+        if (pendingColorMode === "custom" && pendingCustomColor) {
+            return pendingCustomColor;
+        }
+
+        if (myUser && myUser.userId) {
+            return colorFromSeed(myUser.userId);
+        }
+
+        return USER_COLORS[0];
+    }
+
+    function renderUserColorControls() {
+        const colorInput = $("userColorInput");
+        const autoBtn = $("userColorAutoBtn");
+        const hint = $("userColorHint");
+        const previewColor = getColorPreview();
+
+        if (colorInput) {
+            colorInput.value = previewColor;
+            colorInput.title = pendingColorMode === "custom" ? "当前使用自定义颜色" : "当前使用自动分配颜色";
+        }
+
+        if (autoBtn) {
+            autoBtn.classList.toggle("active", pendingColorMode !== "custom");
+        }
+
+        if (hint) {
+            hint.textContent = pendingColorMode === "custom"
+                ? `当前使用自定义颜色 ${previewColor}`
+                : `当前使用自动分配颜色 ${previewColor}`;
+        }
+    }
+
+    function updateCurrentUserColor(colorMode, customColor) {
+        const current = myUser || loadUser();
+        if (!current) {
+            pendingColorMode = colorMode === "custom" && normalizeHexColor(customColor) ? "custom" : "auto";
+            pendingCustomColor = pendingColorMode === "custom" ? normalizeHexColor(customColor) : "";
+            renderUserColorControls();
+            return null;
+        }
+
+        const user = makeUser(current.userId, current.userName, colorMode, customColor);
+        persistUser(user, { updateNameInput: false });
+        syncUserProfile();
+        updateLocalUserColor(user);
         return user;
     }
 
@@ -224,10 +326,16 @@
         }
 
         const firstRun = force && !hasSavedSettings();
+        const savedUser = myUser || loadUser();
+        if (!myUser && savedUser) {
+            myUser = savedUser;
+        }
         $("serverUrlInput").value = getServerUrl();
         $("repoUrlInput").value = firstRun ? "" : getRepoUrl();
         $("repoRootInput").value = firstRun ? "" : getRepoRoot();
-        $("userNameInput").value = myUser ? myUser.userName : getWpsUserName();
+        $("userNameInput").value = savedUser ? savedUser.userName : getWpsUserName();
+        syncColorDraftFromUser(savedUser);
+        renderUserColorControls();
         modal.dataset.force = force ? "true" : "false";
         modal.classList.add("open");
         $("closeSettingsBtn").style.display = force ? "none" : "inline-flex";
@@ -282,7 +390,7 @@
         $("repoUrlInput").value = repoUrl;
         $("repoRootInput").value = repoRoot;
 
-        const user = saveUserName(userName);
+        const user = saveUserName(userName, getColorDraftOptions());
         if (!user) {
             return;
         }
@@ -300,9 +408,8 @@
                     connectRoom(connection);
                 }
             } else {
-                for (const connection of roomConnections.values()) {
-                    sendJoin(connection);
-                }
+                updateLocalUserColor(user);
+                syncUserProfile();
             }
         } else {
             autoJoinRoom();
@@ -841,6 +948,36 @@
             color: myUser.color,
             workbookName: connection.workbookName,
         });
+    }
+
+    function syncUserProfile() {
+        if (!joined || !myUser) {
+            return;
+        }
+
+        for (const connection of roomConnections.values()) {
+            sendToConnection(connection, {
+                type: "userUpdate",
+                userName: myUser.userName,
+                color: myUser.color,
+            });
+        }
+    }
+
+    function updateLocalUserColor(user) {
+        for (const connection of roomConnections.values()) {
+            connection.users = connection.users.map(item => item.userId === user.userId
+                ? { ...item, userName: user.userName, color: user.color }
+                : item);
+            connection.conflicts = connection.conflicts.map(conflict => ({
+                ...conflict,
+                users: conflict.users.map(item => item.userId === user.userId
+                    ? { ...item, userName: user.userName, color: user.color }
+                    : item),
+            }));
+        }
+
+        renderActiveRoomState();
     }
 
     function send(data) {
@@ -2008,6 +2145,8 @@
 
     function initControls() {
         myUser = loadUser();
+        syncColorDraftFromUser(myUser);
+        renderUserColorControls();
         const settingsSaved = hasSavedSettings();
 
         $("reconnectBtn").addEventListener("click", function () {
@@ -2026,6 +2165,8 @@
         const repoUrlInput = $("repoUrlInput");
         const repoRootInput = $("repoRootInput");
         const userNameInput = $("userNameInput");
+        const userColorInput = $("userColorInput");
+        const userColorAutoBtn = $("userColorAutoBtn");
 
         $("openSettingsBtn").addEventListener("click", function () {
             openSettingsModal(false);
@@ -2042,6 +2183,16 @@
         bindCommitOnEnter(repoUrlInput, saveSettings);
         bindCommitOnEnter(repoRootInput, saveSettings);
         bindCommitOnEnter(userNameInput, saveSettings);
+
+        userColorInput.addEventListener("input", function () {
+            updateCurrentUserColor("custom", userColorInput.value);
+        });
+        userColorInput.addEventListener("change", function () {
+            updateCurrentUserColor("custom", userColorInput.value);
+        });
+        userColorAutoBtn.addEventListener("click", function () {
+            updateCurrentUserColor("auto", "");
+        });
 
         window.addEventListener("beforeunload", leaveRoom);
         window.addEventListener("unload", leaveRoom);

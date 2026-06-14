@@ -1,5 +1,6 @@
 export type ClientMsg =
     | JoinMsg
+    | UserUpdateMsg
     | LeaveMsg
     | HeartbeatMsg
     | SelectionMsg
@@ -16,6 +17,12 @@ export interface JoinMsg {
 
 export interface LeaveMsg {
     type: "leave";
+}
+
+export interface UserUpdateMsg {
+    type: "userUpdate";
+    userName: string;
+    color: string;
 }
 
 export interface HeartbeatMsg {

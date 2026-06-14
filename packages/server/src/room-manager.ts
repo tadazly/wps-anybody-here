@@ -8,6 +8,7 @@ import {
     type SelectionInfo,
     type SelectionMsg,
     type ServerMsg,
+    type UserUpdateMsg,
     type UserInfo,
 } from "@wps-anybody-here/shared";
 import type { ClientInfo, ContributionInfo, Room } from "./types";
@@ -142,6 +143,11 @@ export class RoomManager {
 
         if (msg.type === "selection") {
             this.handleSelection(client, msg);
+            return;
+        }
+
+        if (msg.type === "userUpdate") {
+            this.handleUserUpdate(client, msg);
             return;
         }
 
@@ -297,6 +303,48 @@ export class RoomManager {
                 conflicts: this.detectConflicts(room),
             });
         }
+    }
+
+    private handleUserUpdate(client: ClientInfo, msg: UserUpdateMsg) {
+        const userName = this.normalizeText(msg.userName) || client.userName;
+        const color = this.normalizeColor(msg.color) || client.color;
+
+        if (userName === client.userName && color === client.color) {
+            return;
+        }
+
+        client.userName = userName;
+        client.color = color;
+        client.lastHeartbeatAt = Date.now();
+
+        const room = this.getRoom(client.roomId);
+        const current = room.clients.get(client.userId);
+        if (current) {
+            current.userName = userName;
+            current.color = color;
+            current.lastHeartbeatAt = client.lastHeartbeatAt;
+        }
+
+        room.updatedAt = client.lastHeartbeatAt;
+        this.updateRoomUserDisplay(room, client);
+
+        this.broadcast(room, {
+            type: "presence",
+            users: this.buildPresence(room),
+        });
+
+        const selection = room.selections.get(client.userId);
+        if (selection) {
+            this.broadcast(room, {
+                type: "selection",
+                selection,
+            }, client.userId);
+        }
+
+        this.broadcast(room, {
+            type: "conflicts",
+            conflicts: this.detectConflicts(room),
+        });
     }
 
     private handleSelection(client: ClientInfo, msg: SelectionMsg) {
@@ -548,6 +596,11 @@ export class RoomManager {
 
     private normalizeText(value: unknown) {
         return typeof value === "string" ? value.trim() : "";
+    }
+
+    private normalizeColor(value: unknown) {
+        const color = this.normalizeText(value);
+        return /^#[0-9a-f]{6}$/i.test(color) ? color : "";
     }
 
     private isCellAddress(value: string) {

@@ -260,6 +260,40 @@
             outline: 2px solid rgba(37, 99, 235, 0.14);
         }
 
+        .settings-inline-field {
+            display: flex;
+            align-items: stretch;
+            gap: 7px;
+        }
+
+        .settings-inline-field input[type="text"] {
+            flex: 1 1 auto;
+        }
+
+        .settings-inline-field .color-picker-input {
+            width: 38px;
+            min-width: 38px;
+            height: 34px;
+            padding: 3px;
+            cursor: pointer;
+        }
+
+        .color-auto-btn {
+            min-width: 42px;
+            padding: 0 8px;
+            border: 1px solid #cbd5e1;
+            background: #f8fafc;
+            color: #334155;
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        .color-auto-btn.active {
+            border-color: #2563eb;
+            background: #eff6ff;
+            color: #1d4ed8;
+        }
+
         .settings-hint {
             margin-top: 4px;
             color: #64748b;
@@ -510,7 +544,12 @@
 
             <div class="settings-field">
                 <label for="userNameInput">用户名</label>
-                <input id="userNameInput" type="text" spellcheck="false" placeholder="我的名字">
+                <div class="settings-inline-field">
+                    <input id="userNameInput" type="text" spellcheck="false" placeholder="我的名字">
+                    <input id="userColorInput" class="color-picker-input" type="color" value="#4E7FFF" title="选择用户颜色" aria-label="选择用户颜色">
+                    <button id="userColorAutoBtn" class="color-auto-btn active" type="button" title="使用自动分配颜色">自动</button>
+                </div>
+                <div id="userColorHint" class="settings-hint"></div>
             </div>
 
             <div class="settings-actions">
