@@ -1276,7 +1276,12 @@
     }
 
     function normalizeAddress(address) {
-        return String(address || "")
+        const text = String(address || "").trim();
+        if (/^function\s+Address\s*\(/i.test(text)) {
+            return "";
+        }
+
+        return text
             .replace(/\$/g, "")
             .replace(/^.*!/, "")
             .trim();
@@ -1313,8 +1318,26 @@
     }
 
     function getRangeAddress(range) {
+        if (!range) {
+            return "";
+        }
+
         try {
-            return normalizeAddress(range.Address);
+            const address = range.Address;
+            if (typeof address === "function") {
+                try {
+                    const normalized = normalizeAddress(address.call(range));
+                    if (normalized) {
+                        return normalized;
+                    }
+                } catch {
+                    // Try the WPS/Excel method signature below.
+                }
+
+                return normalizeAddress(address.call(range, false, false));
+            }
+
+            return normalizeAddress(address);
         } catch {
             return "";
         }

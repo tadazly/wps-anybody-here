@@ -308,6 +308,11 @@ export class RoomManager {
             return;
         }
 
+        if (!this.isCellAddress(address)) {
+            this.send(client.ws, { type: "error", message: "address is invalid" });
+            return;
+        }
+
         const room = this.getRoom(client.roomId);
         const selection: SelectionInfo = {
             userId: client.userId,
@@ -333,6 +338,11 @@ export class RoomManager {
 
         if (!sheetName || !address) {
             this.send(client.ws, { type: "error", message: "sheetName and address are required" });
+            return;
+        }
+
+        if (!this.isCellAddress(address)) {
+            this.send(client.ws, { type: "error", message: "address is invalid" });
             return;
         }
 
@@ -538,5 +548,9 @@ export class RoomManager {
 
     private normalizeText(value: unknown) {
         return typeof value === "string" ? value.trim() : "";
+    }
+
+    private isCellAddress(value: string) {
+        return /^\$?[A-Z]{1,3}\$?\d+(?::\$?[A-Z]{1,3}\$?\d+)?$/i.test(value);
     }
 }
