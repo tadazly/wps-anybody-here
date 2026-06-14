@@ -37,6 +37,7 @@
 ```bash
 npm install
 npm run publish:addin
+npm run build
 npm run start
 ```
 
