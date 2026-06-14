@@ -24,6 +24,7 @@
     const RECONNECT_INTERVAL_MS = 10_000;
     const HEARTBEAT_INTERVAL_MS = 5_000;
     const SELECTION_THROTTLE_MS = 200;
+    const HIGHLIGHT_RETRY_MS = 800;
     const AUTO_JOIN_DELAY_MS = 500;
     const AUTO_JOIN_RETRY_MS = 2000;
     const CONFLICT_COLOR = "#ff4d4f";
@@ -52,6 +53,7 @@
     let reconnectCountdownTimer = null;
     let heartbeatTimer = null;
     let selectionTimer = null;
+    let highlightRetryTimer = null;
     let workbookScanTimer = null;
     let autoJoinTimer = null;
     let lastAutoJoinMessage = "";
@@ -2052,7 +2054,10 @@
 
     async function refreshHighlights() {
         try {
-            await clearOldHighlights();
+            const cleared = await clearOldHighlights();
+            if (!cleared) {
+                return;
+            }
 
             for (const selection of remoteSelections.values()) {
                 await highlightSelectionCell(selection);
@@ -2079,13 +2084,21 @@
         const key = `${selection.sheetName}!${address}`;
 
         try {
-            highlightSelectionDataRow(selection, sheet, address);
+            if (!highlightSelectionDataRow(selection, sheet, address)) {
+                scheduleHighlightRetry();
+                return;
+            }
 
             const state = rememberHighlightState(key, range);
-            applyRangeBorder(range, selection.color, XL_BORDER_WEIGHT_MEDIUM);
+            if (!applyRangeBorder(range, selection.color, XL_BORDER_WEIGHT_MEDIUM)) {
+                scheduleHighlightRetry();
+                return;
+            }
+
             addSelectionLabel(sheet, range, selection.userName, selection.color, state);
         } catch (err) {
             console.error("highlightSelectionCell failed", err);
+            scheduleHighlightRetry();
         }
     }
 
@@ -2103,18 +2116,20 @@
         rememberHighlightState(key, range);
 
         try {
-            range.Interior.Pattern = XL_PATTERN_SOLID;
-            range.Interior.Color = cssHexToWpsColor(CONFLICT_FILL_COLOR);
-            applyRangeBorder(range, CONFLICT_BORDER_COLOR, XL_BORDER_WEIGHT_MEDIUM);
+            if (!applyRangeFill(range, CONFLICT_FILL_COLOR) || !applyRangeBorder(range, CONFLICT_BORDER_COLOR, XL_BORDER_WEIGHT_MEDIUM)) {
+                scheduleHighlightRetry();
+            }
         } catch (err) {
             console.error("highlightConflictCell failed", err);
+            scheduleHighlightRetry();
         }
     }
 
     async function clearOldHighlights() {
         const app = getApp();
+        let hasPendingRestore = false;
 
-        for (const entry of originalHighlights.entries()) {
+        for (const entry of Array.from(originalHighlights.entries())) {
             const key = entry[0];
             const state = entry[1];
             const sep = key.lastIndexOf("!");
@@ -2128,18 +2143,46 @@
             try {
                 const sheet = app.Worksheets.Item(sheetName);
                 const range = sheet.Range(address);
-                restoreRangeHighlight(range, state);
+                if (restoreRangeHighlight(range, state)) {
+                    originalHighlights.delete(key);
+                } else {
+                    hasPendingRestore = true;
+                }
             } catch {
-                // ignore; sheet or cell may have disappeared
+                hasPendingRestore = true;
             }
         }
 
-        originalHighlights.clear();
+        if (hasPendingRestore) {
+            scheduleHighlightRetry();
+            return false;
+        } else {
+            clearHighlightRetry();
+            return true;
+        }
     }
 
     function cleanupWorkbookHighlights() {
         clearOldHighlights();
         deleteAllSelectionLabelShapes();
+    }
+
+    function scheduleHighlightRetry() {
+        if (highlightRetryTimer) {
+            return;
+        }
+
+        highlightRetryTimer = window.setTimeout(function () {
+            highlightRetryTimer = null;
+            refreshHighlights();
+        }, HIGHLIGHT_RETRY_MS);
+    }
+
+    function clearHighlightRetry() {
+        if (highlightRetryTimer) {
+            window.clearTimeout(highlightRetryTimer);
+            highlightRetryTimer = null;
+        }
     }
 
     function rememberHighlightState(key, range) {
@@ -2189,81 +2232,86 @@
 
     function restoreRangeHighlight(range, state) {
         if (!state) {
-            return;
+            return true;
         }
 
-        deleteSelectionLabels(state);
+        let restored = deleteSelectionLabels(state, range);
 
         try {
-            restoreInterior(range.Interior, state.interior);
+            restored = restoreInterior(range.Interior, state.interior) && restored;
         } catch {
-            // ignore
+            restored = false;
         }
 
         for (const borderState of state.borders || []) {
             const border = getRangeBorder(range, borderState.index);
-            restoreBorder(border, borderState);
+            restored = restoreBorder(border, borderState) && restored;
         }
+
+        return restored;
     }
 
     function restoreInterior(interior, state) {
         if (!interior || !state) {
-            return;
+            return true;
         }
 
         if (state.colorIndex === XL_COLOR_INDEX_NONE) {
-            writeWpsProperty(interior, "ColorIndex", XL_COLOR_INDEX_NONE);
-            return;
+            return tryWriteWpsProperty(interior, "ColorIndex", XL_COLOR_INDEX_NONE);
         }
 
-        writeWpsProperty(interior, "Pattern", state.pattern);
-        writeWpsProperty(interior, "ColorIndex", state.colorIndex);
-        writeWpsProperty(interior, "Color", state.color);
+        return tryWriteWpsProperty(interior, "Pattern", state.pattern)
+            && tryWriteWpsProperty(interior, "ColorIndex", state.colorIndex)
+            && tryWriteWpsProperty(interior, "Color", state.color);
     }
 
     function restoreBorder(border, state) {
         if (!border || !state) {
-            return;
+            return true;
         }
 
-        writeWpsProperty(border, "LineStyle", state.lineStyle);
+        let restored = tryWriteWpsProperty(border, "LineStyle", state.lineStyle);
 
         if (state.lineStyle === XL_LINE_STYLE_NONE) {
-            return;
+            return restored;
         }
 
-        writeWpsProperty(border, "Weight", state.weight);
-        writeWpsProperty(border, "ColorIndex", state.colorIndex);
-        writeWpsProperty(border, "Color", state.color);
+        restored = tryWriteWpsProperty(border, "Weight", state.weight) && restored;
+        restored = tryWriteWpsProperty(border, "ColorIndex", state.colorIndex) && restored;
+        restored = tryWriteWpsProperty(border, "Color", state.color) && restored;
+        return restored;
     }
 
     function highlightSelectionDataRow(selection, sheet, address) {
         if (!selection.rowId || !isGameConfigSheet(selection.sheetName)) {
-            return;
+            return true;
         }
 
         const rowIndex = parseRowFromAddress(address);
         if (!rowIndex) {
-            return;
+            return false;
         }
 
         const fillColor = blendCssHexWithWhite(selection.color, 0.86);
         const colCount = Math.max(1, getRangeCollectionCount(getSheetUsedRange(sheet), "Columns") || 256);
+        let applied = true;
 
         for (let col = 1; col <= colCount; col++) {
             const cellAddress = `${columnIndexToName(col)}${rowIndex}`;
             const cell = sheet.Range(cellAddress);
             rememberHighlightState(`${selection.sheetName}!${cellAddress}`, cell);
-            applyRangeFill(cell, fillColor);
+            applied = applyRangeFill(cell, fillColor) && applied;
         }
+
+        return applied;
     }
 
     function applyRangeFill(range, color) {
         try {
-            range.Interior.Pattern = XL_PATTERN_SOLID;
-            range.Interior.Color = cssHexToWpsColor(color);
+            return tryWriteWpsProperty(range.Interior, "Pattern", XL_PATTERN_SOLID)
+                && tryWriteWpsProperty(range.Interior, "Color", cssHexToWpsColor(color));
         } catch {
-            // ignore
+            return false;
         }
     }
 
@@ -2272,9 +2320,9 @@
             return;
         }
 
-        const shape = createSelectionLabelShape(sheet, range, userName, color);
-        if (shape) {
-            state.labels.push(shape);
+        const label = createSelectionLabelShape(sheet, range, userName, color);
+        if (label) {
+            state.labels.push(label);
         }
     }
 
@@ -2300,8 +2348,13 @@
             const width = calcSelectionLabelWidth(text, availableWidth);
             const shape = shapes.AddTextbox(MSO_TEXT_ORIENTATION_HORIZONTAL, labelLeft, labelTop, width, labelHeight);
             const wpsColor = cssHexToWpsColor(color);
+            const labelName = `${SELECTION_LABEL_PREFIX}${Date.now()}_${Math.floor(Math.random() * 100000)}`;
 
-            writeWpsProperty(shape, "Name", `${SELECTION_LABEL_PREFIX}${Date.now()}`);
+            if (!tryWriteWpsProperty(shape, "Name", labelName)) {
+                deleteShape(shape);
+                return null;
+            }
+
             writeWpsProperty(shape, "Left", labelLeft);
             writeWpsProperty(shape, "Top", labelTop);
             writeWpsProperty(shape, "Width", width);
@@ -2310,7 +2363,10 @@
             setShapeFill(shape, wpsColor);
             setShapeLine(shape, wpsColor);
 
-            return shape;
+            return {
+                shape,
+                name: labelName,
+            };
         } catch (err) {
             console.error("createSelectionLabelShape failed", err);
             return null;
@@ -2433,18 +2489,54 @@
         }
     }
 
-    function deleteSelectionLabels(state) {
-        for (const shape of state.labels || []) {
-            try {
-                if (shape && typeof shape.Delete === "function") {
-                    shape.Delete();
-                }
-            } catch {
-                // ignore
+    function deleteSelectionLabels(state, range) {
+        const remaining = [];
+        const sheet = getRangeWorksheet(range);
+
+        for (const label of state.labels || []) {
+            const shape = getSelectionLabelShape(label);
+            const name = getSelectionLabelName(label);
+            let deleted = false;
+
+            if (shape) {
+                deleted = deleteShapeAndVerify(shape, name, sheet);
+            }
+
+            if (!deleted && name) {
+                deleted = deleteSelectionLabelShapeByName(name, sheet);
+            }
+
+            if (!deleted) {
+                remaining.push(label);
             }
         }
 
-        state.labels = [];
+        state.labels = remaining;
+        return remaining.length === 0;
+    }
+
+    function getSelectionLabelShape(label) {
+        if (!label) {
+            return null;
+        }
+
+        return label.shape || label;
+    }
+
+    function getSelectionLabelName(label) {
+        if (!label) {
+            return "";
+        }
+
+        if (typeof label.name === "string" && label.name) {
+            return label.name;
+        }
+
+        return readWpsProperty(getSelectionLabelShape(label), "Name") || "";
+    }
+
+    function getRangeWorksheet(range) {
+        return readWpsProperty(range, "Worksheet") || readWpsProperty(range, "Parent") || null;
     }
 
     function deleteAllSelectionLabelShapes() {
@@ -2496,20 +2588,149 @@
         }
     }
 
+    function deleteShapeAndVerify(shape, name, sheet) {
+        try {
+            if (!shape || typeof shape.Delete !== "function") {
+                return false;
+            }
+
+            shape.Delete();
+        } catch {
+            return false;
+        }
+
+        if (!name) {
+            return true;
+        }
+
+        return !selectionLabelShapeExists(name, sheet);
+    }
+
+    function deleteSelectionLabelShapeByName(name, preferredSheet) {
+        if (!name) {
+            return false;
+        }
+
+        if (preferredSheet && deleteSelectionLabelShapeByNameOnSheet(preferredSheet, name)) {
+            return true;
+        }
+
+        try {
+            const sheets = getApp().Worksheets;
+            const count = readCollectionCount(sheets);
+
+            for (let index = 1; index <= count; index++) {
+                const sheet = getCollectionItem(sheets, index);
+                if (sheet === preferredSheet) {
+                    continue;
+                }
+
+                if (deleteSelectionLabelShapeByNameOnSheet(sheet, name)) {
+                    return true;
+                }
+            }
+        } catch {
+            // ignore
+        }
+
+        return !selectionLabelShapeExists(name, preferredSheet);
+    }
+
+    function deleteSelectionLabelShapeByNameOnSheet(sheet, name) {
+        if (!sheet || !name) {
+            return false;
+        }
+
+        let found = false;
+
+        try {
+            const shapes = sheet.Shapes;
+            const count = readCollectionCount(shapes);
+
+            for (let index = count; index >= 1; index--) {
+                const shape = getCollectionItem(shapes, index);
+                if (readWpsProperty(shape, "Name") === name) {
+                    found = true;
+                    deleteShape(shape);
+                }
+            }
+        } catch {
+            return false;
+        }
+
+        return found && !selectionLabelShapeExistsOnSheet(sheet, name);
+    }
+
+    function selectionLabelShapeExists(name, preferredSheet) {
+        if (!name) {
+            return false;
+        }
+
+        if (preferredSheet && selectionLabelShapeExistsOnSheet(preferredSheet, name)) {
+            return true;
+        }
+
+        try {
+            const sheets = getApp().Worksheets;
+            const count = readCollectionCount(sheets);
+
+            for (let index = 1; index <= count; index++) {
+                const sheet = getCollectionItem(sheets, index);
+                if (sheet === preferredSheet) {
+                    continue;
+                }
+
+                if (selectionLabelShapeExistsOnSheet(sheet, name)) {
+                    return true;
+                }
+            }
+        } catch {
+            return true;
+        }
+
+        return false;
+    }
+
+    function selectionLabelShapeExistsOnSheet(sheet, name) {
+        if (!sheet || !name) {
+            return false;
+        }
+
+        try {
+            const shapes = sheet.Shapes;
+            const count = readCollectionCount(shapes);
+
+            for (let index = 1; index <= count; index++) {
+                const shape = getCollectionItem(shapes, index);
+                if (readWpsProperty(shape, "Name") === name) {
+                    return true;
+                }
+            }
+        } catch {
+            return true;
+        }
+
+        return false;
+    }
+
     function applyRangeBorder(range, color, weight) {
         const wpsColor = cssHexToWpsColor(color);
         const borderWeight = weight || XL_BORDER_WEIGHT_THIN;
+        let applied = true;
 
         for (const index of BORDER_EDGE_INDEXES) {
             const border = getRangeBorder(range, index);
             if (!border) {
+                applied = false;
                 continue;
             }
 
-            border.LineStyle = XL_LINE_STYLE_CONTINUOUS;
-            border.Weight = borderWeight;
-            border.Color = wpsColor;
+            applied = tryWriteWpsProperty(border, "LineStyle", XL_LINE_STYLE_CONTINUOUS) && applied;
+            applied = tryWriteWpsProperty(border, "Weight", borderWeight) && applied;
+            applied = tryWriteWpsProperty(border, "Color", wpsColor) && applied;
         }
+
+        return applied;
     }
 
     function getRangeBorder(range, index) {
@@ -2546,15 +2767,38 @@
     }
 
     function writeWpsProperty(target, propertyName, value) {
+        tryWriteWpsProperty(target, propertyName, value);
+    }
+
+    function tryWriteWpsProperty(target, propertyName, value) {
         if (!target || value === undefined || value === null) {
-            return;
+            return true;
         }
 
         try {
             target[propertyName] = value;
+            return wpsPropertyMatches(target, propertyName, value);
         } catch {
-            // ignore
+            return false;
         }
+    }
+
+    function wpsPropertyMatches(target, propertyName, expected) {
+        const actual = readWpsProperty(target, propertyName);
+        if (actual === undefined || actual === null) {
+            return false;
+        }
+
+        if (typeof expected === "number") {
+            const actualNumber = Number(actual);
+            return Number.isFinite(actualNumber) && Math.abs(actualNumber - expected) < 0.001;
+        }
+
+        if (typeof expected === "boolean") {
+            return Boolean(actual) === expected;
+        }
+
+        return String(actual) === String(expected);
     }
 
     function blendCssHexWithWhite(color, whiteRatio) {
