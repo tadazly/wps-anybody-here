@@ -1250,7 +1250,7 @@
             return;
         }
 
-        const selections = Array.from(remoteSelections.values());
+        const selections = Array.from(remoteSelections.values()).filter(shouldDisplaySelection);
         $("selectionCount").textContent = String(selections.length);
         container.innerHTML = "";
         container.className = selections.length ? "" : "empty";
@@ -1373,7 +1373,7 @@
         }
 
         miniMap.innerHTML = "";
-        const selections = Array.from(remoteSelections.values());
+        const selections = Array.from(remoteSelections.values()).filter(shouldDisplaySelection);
 
         if (!selections.length && !conflicts.length) {
             const empty = document.createElement("div");
@@ -1489,6 +1489,22 @@
         return `${conflict.sheetName}!${conflict.address}`;
     }
 
+    function shouldDisplaySelection(selection) {
+        if (!selection || !selection.sheetName || !selection.address) {
+            return false;
+        }
+
+        if (selection.rowId) {
+            return true;
+        }
+
+        if (!isGameConfigSheet(selection.sheetName)) {
+            return true;
+        }
+
+        return !localGameConfigRowHasId(selection.sheetName, selection.address);
+    }
+
     function getGameConfigCellMeta(sheetName, address) {
         try {
             if (!isGameConfigSheet(sheetName)) {
@@ -1524,6 +1540,10 @@
             return resolveGameConfigAddress(selection.sheetName, selection.rowId, selection.fieldName);
         }
 
+        if (isGameConfigSheet(selection.sheetName) && localGameConfigRowHasId(selection.sheetName, selection.address)) {
+            return "";
+        }
+
         return normalizeAddress(selection.address);
     }
 
@@ -1550,6 +1570,24 @@
             return `${columnName}${rowIndex}`;
         } catch {
             return "";
+        }
+    }
+
+    function localGameConfigRowHasId(sheetName, address) {
+        try {
+            if (!isGameConfigSheet(sheetName)) {
+                return false;
+            }
+
+            const rowIndex = parseRowFromAddress(address);
+            if (!rowIndex) {
+                return false;
+            }
+
+            const sheet = getApp().Worksheets.Item(sheetName);
+            return Boolean(formatCellDisplayValue(sheet.Range(`A${rowIndex}`)));
+        } catch {
+            return false;
         }
     }
 
@@ -1966,9 +2004,10 @@
         const range = sheet.Range(address);
         const key = `${selection.sheetName}!${address}`;
 
-        const state = rememberHighlightState(key, range);
-
         try {
+            highlightSelectionDataRow(selection, sheet, address);
+
+            const state = rememberHighlightState(key, range);
             applyRangeBorder(range, selection.color, XL_BORDER_WEIGHT_MEDIUM);
             addSelectionLabel(sheet, range, selection.userName, selection.color, state);
         } catch (err) {
@@ -2117,6 +2156,36 @@
         writeWpsProperty(border, "Weight", state.weight);
         writeWpsProperty(border, "ColorIndex", state.colorIndex);
         writeWpsProperty(border, "Color", state.color);
+    }
+
+    function highlightSelectionDataRow(selection, sheet, address) {
+        if (!selection.rowId || !isGameConfigSheet(selection.sheetName)) {
+            return;
+        }
+
+        const rowIndex = parseRowFromAddress(address);
+        if (!rowIndex) {
+            return;
+        }
+
+        const fillColor = blendCssHexWithWhite(selection.color, 0.86);
+        const colCount = Math.max(1, getRangeCollectionCount(getSheetUsedRange(sheet), "Columns") || 256);
+
+        for (let col = 1; col <= colCount; col++) {
+            const cellAddress = `${columnIndexToName(col)}${rowIndex}`;
+            const cell = sheet.Range(cellAddress);
+            rememberHighlightState(`${selection.sheetName}!${cellAddress}`, cell);
+            applyRangeFill(cell, fillColor);
+        }
+    }
+
+    function applyRangeFill(range, color) {
+        try {
+            range.Interior.Pattern = XL_PATTERN_SOLID;
+            range.Interior.Color = cssHexToWpsColor(color);
+        } catch {
+            // ignore
+        }
     }
 
     function addSelectionLabel(sheet, range, userName, color, state) {
@@ -2360,16 +2429,34 @@
         }
     }
 
+    function blendCssHexWithWhite(color, whiteRatio) {
+        const normalized = normalizeCssHex(color) || normalizeCssHex(USER_COLORS[0]);
+        const ratio = Math.max(0, Math.min(1, whiteRatio));
+        const red = parseInt(normalized.slice(0, 2), 16);
+        const green = parseInt(normalized.slice(2, 4), 16);
+        const blue = parseInt(normalized.slice(4, 6), 16);
+
+        return `#${[
+            Math.round(red * (1 - ratio) + 255 * ratio),
+            Math.round(green * (1 - ratio) + 255 * ratio),
+            Math.round(blue * (1 - ratio) + 255 * ratio),
+        ].map(function (value) {
+            return value.toString(16).padStart(2, "0");
+        }).join("")}`;
+    }
+
     function cssHexToWpsColor(color) {
-        let normalized = String(color || "").replace("#", "").trim();
-        if (!/^[0-9a-f]{6}$/i.test(normalized)) {
-            normalized = USER_COLORS[0].replace("#", "");
-        }
+        const normalized = normalizeCssHex(color) || normalizeCssHex(USER_COLORS[0]);
 
         const red = parseInt(normalized.slice(0, 2), 16);
         const green = parseInt(normalized.slice(2, 4), 16);
         const blue = parseInt(normalized.slice(4, 6), 16);
         return red + green * 256 + blue * 65536;
+    }
+
+    function normalizeCssHex(color) {
+        const normalized = String(color || "").replace("#", "").trim();
+        return /^[0-9a-f]{6}$/i.test(normalized) ? normalized : "";
     }
 
     function initControls() {
