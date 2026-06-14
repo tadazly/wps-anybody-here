@@ -189,6 +189,7 @@ export class RoomManager {
 
         room.clients.delete(client.userId);
         room.selections.delete(client.userId);
+        this.removeUserChanges(room, client.userId);
         room.updatedAt = Date.now();
 
         if (options.notify) {
@@ -206,6 +207,11 @@ export class RoomManager {
         this.broadcast(room, {
             type: "selectionRemoved",
             userId: client.userId,
+        });
+
+        this.broadcast(room, {
+            type: "conflicts",
+            conflicts: this.detectConflicts(room),
         });
 
         if (room.clients.size === 0) {
@@ -520,6 +526,18 @@ export class RoomManager {
         }
 
         return conflicts;
+    }
+
+    private removeUserChanges(room: Room, userId: string) {
+        for (const [key, list] of Array.from(room.changes.entries())) {
+            const next = list.filter(item => item.userId !== userId);
+
+            if (next.length) {
+                room.changes.set(key, next);
+            } else {
+                room.changes.delete(key);
+            }
+        }
     }
 
     private toUserInfo(client: ClientInfo): UserInfo {

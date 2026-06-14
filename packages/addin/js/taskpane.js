@@ -829,6 +829,7 @@
             return;
         }
 
+        cleanupWorkbookHighlights();
         connection.socket = null;
         connection.users = [];
         connection.selections.clear();
@@ -981,6 +982,13 @@
         renderActiveRoomState();
     }
 
+    function removeUserFromConflicts(conflictList, userId) {
+        return (conflictList || []).map(conflict => ({
+            ...conflict,
+            users: conflict.users.filter(item => item.userId !== userId),
+        })).filter(conflict => conflict.users.length > 1);
+    }
+
     function send(data) {
         const connection = getActiveConnection();
         return sendToConnection(connection, data);
@@ -1035,6 +1043,9 @@
         }
 
         if (msg.type === "userLeft") {
+            connection.selections.delete(msg.user.userId);
+            connection.conflicts = removeUserFromConflicts(connection.conflicts, msg.user.userId);
+
             if (myUser && msg.user.userId !== myUser.userId && shouldShowUserToast("left", msg.user.userId)) {
                 showToast({
                     title: `${msg.user.userName} 离开了房间`,
@@ -1043,6 +1054,10 @@
                     duration: 2200,
                 });
                 log(`${msg.user.userName} 离开了房间`);
+            }
+            if (connection.roomId === roomId) {
+                renderActiveRoomState();
+                refreshHighlights();
             }
             return;
         }
