@@ -172,8 +172,8 @@ export function renderDashboardHtml() {
 <body>
     <header>
         <div>
-            <h1>wps-anybody-here Dashboard</h1>
-            <div class="sub">在线用户、打开表格和编辑贡献度</div>
+            <h1>表里有人 Dashboard</h1>
+            <div class="sub">看看表里谁在配，谁在改，谁在和你撞格子</div>
         </div>
         <div id="updatedAt" class="sub">等待数据...</div>
     </header>
