@@ -1,297 +1,294 @@
-# Decisions
+# 决策记录
 
-This document records product and technical decisions for `表里有人`.
+本文记录 `表里有人` 的产品和技术决策。后续修改如果要推翻这些决策，应先更新本文并说明原因。
 
-The goal is to prevent future agents or contributors from reversing decisions without understanding why they were made.
+## 1. 产品名称和口号
 
-## 1. Product Name And Slogan
+决策：
 
-Decision:
+- 中文名：`表里有人`
+- 英文名：`Anybody Here`
+- 口号：`看看表里谁在配，谁在改，谁在和你撞格子`
 
-- Chinese name: `表里有人`
-- English name: `Anybody Here`
-- Slogan: `看看表里谁在配，谁在改，谁在和你撞格子`
+原因：
 
-Reason:
+- 目标用户主要是在 WPS 中编辑配置表的策划和内容同学。
+- 中文名和口号直接解释问题：不知道谁也在同一张表里，不知道哪里会撞格子。
 
-- The target users are mainly game designers editing WPS configuration spreadsheets.
-- The Chinese name and slogan directly explain the pain: not knowing who else is editing the same table and where conflicts may happen.
+影响：
 
-Implications:
+- 中文 UI 优先显示 `表里有人`。
+- 非中文功能区可显示 `Anybody Here`。
+- 主面板副标题是 `WPS 配表协作房间`。
 
-- User-facing Chinese UI should prefer `表里有人`.
-- Ribbon may show `Anybody Here` in non-Chinese environments.
-- Main panel subtitle is `WPS 配表协作房间`.
+## 2. 设置放在弹窗里
 
-## 2. First Run Uses A Settings Modal
+决策：
 
-Decision:
+- 服务器 socket 地址、表格仓库地址、本地仓库根目录、用户名、用户颜色和高亮开关放在设置弹窗。
+- 首次运行自动打开设置弹窗。
+- 保存一次后，后续打开 WPS 不再自动弹窗。
+- 用户可以从主面板手动重新打开设置。
 
-- Server socket URL, spreadsheet repository URL, local repository root, and user name live in a settings modal.
-- The settings modal opens automatically only on first run.
-- After saving once, the modal does not auto-open on later WPS starts.
-- Users can manually reopen settings.
+原因：
 
-Reason:
+- 主面板应该聚焦协作状态，不堆配置字段。
+- 非技术用户需要明确的首次配置流程。
+- 每次打开 WPS 都弹窗会打扰日常使用。
 
-- The main collaboration panel should not be cluttered with configuration fields.
-- Non-programmer users should get a guided first-run flow.
-- Repeated popups after setup would be annoying during daily WPS use.
+影响：
 
-Implications:
+- 保留 `settingsSaved` 持久化标记。
+- 必填设置保存前不自动加入协作。
+- 修改服务器、仓库或本地根目录后，需要重连或重建房间。
 
-- Keep a persisted `settingsSaved` marker.
-- Do not auto-join collaboration until required settings are saved.
-- Changing settings after joining should reconnect or rejoin rooms as needed.
+## 3. 不提供项目专属仓库默认值
 
-## 3. No Project-Specific Repository URL Defaults
+决策：
 
-Decision:
+- 公开项目不能内置真实团队仓库地址。
+- 表格仓库地址由用户或团队首次配置时填写。
 
-- The public project must not include any private/internal repository URL as a default value.
-- The spreadsheet repository URL must be filled by the user/team during setup.
+原因：
 
-Reason:
+- 项目面向公开仓库。
+- 硬编码内部 GitLab/GitHub 地址会泄露团队结构。
 
-- This project is intended to be public.
-- Hard-coded internal GitLab/GitHub URLs leak private team structure.
+影响：
 
-Implications:
+- 服务器 socket 地址可以默认 `ws://127.0.0.1:18080`。
+- 表格仓库地址不能默认到真实项目。
+- 文档和 placeholder 使用 `https://git.example.com/team/table` 这类泛化示例。
 
-- It is acceptable to default the server socket URL to local development: `ws://127.0.0.1:18080`.
-- It is not acceptable to default the spreadsheet repository URL to a real team repository.
-- Example repository URLs in docs/placeholders must be generic, such as `https://git.example.com/team/table`.
+## 4. 房间身份使用仓库地址加仓库相对路径
 
-## 4. Room Identity Uses Repo URL Plus Repo-Relative Path
+决策：
 
-Decision:
-
-Room identity should be:
+房间 ID：
 
 ```txt
-<spreadsheet repository URL>::<repo-relative workbook path>
+<表格仓库地址>::<仓库相对工作簿路径>
 ```
 
-Example:
+示例：
 
 ```txt
 https://git.example.com/team/table::version/military.xlsx
 ```
 
-Reason:
+原因：
 
-- Different users clone the same Git repository to different local directories.
-- Local absolute paths cannot reliably identify the same spreadsheet across computers.
-- File name alone is insufficient because two directories may contain same-name spreadsheets.
-- Repository URL prevents different projects with same relative paths from sharing a room by accident.
+- 不同用户会把同一仓库放在不同本地路径。
+- 本机绝对路径无法跨电脑识别同一张表。
+- 文件名不足以区分不同目录下的同名表。
+- 仓库地址可避免不同项目的同名路径混到同一个房间。
 
-Implications:
+影响：
 
-- The plugin needs both spreadsheet repository URL and local repository root.
-- The plugin computes repo-relative paths from the workbook full path.
-- Dashboard should display the repo-relative path, not the full room ID unless needed for debugging.
+- 设置里需要表格仓库地址和本地仓库根目录。
+- 插件从工作簿完整路径计算仓库相对路径。
+- Dashboard 显示文件名和仓库相对路径，不显示完整房间 ID。
 
-## 5. Do Not Show Local Absolute Paths In Dashboard
+## 5. Dashboard 不展示本机绝对路径
 
-Decision:
+决策：
 
-- Server dashboard should not show local absolute paths such as `D:/...` or `C:/Users/...`.
-- Dashboard should show workbook file name and, when available, repo-relative path.
+- Dashboard 不展示 `D:/...`、`C:/Users/...` 这类本机绝对路径。
+- Dashboard 展示工作簿名和仓库相对路径。
 
-Reason:
+原因：
 
-- Local paths are noisy and differ between users.
-- Local paths may expose user names, workspace structure, or private directories.
-- The useful operational identity is the spreadsheet's repo-relative path.
+- 本机路径噪音大，不同用户不一致。
+- 本机路径可能包含用户名、目录结构或私有信息。
+- 对协作运维有用的是仓库相对路径。
 
-Implications:
+影响：
 
-- If the server receives a local absolute path fallback, hide it from normal dashboard display.
-- WPS panel may show only file name; a local tooltip is acceptable for the current user, but not for shared server dashboard.
+- 服务端收到绝对路径兜底值时，普通 Dashboard 展示要隐藏它。
+- WPS 面板可以只显示文件名；完整路径仅作为当前用户本机 tooltip。
 
-## 6. Auto Join And Auto Leave
+## 6. 自动加入和自动离开
 
-Decision:
+决策：
 
-- No manual join/leave buttons in the main panel.
-- After settings are saved, opening WPS/the add-in should auto-join.
-- Closing/unloading should auto-leave.
-- Socket disconnection should show reconnect countdown and retry every 10 seconds.
+- 主面板没有手动加入/离开按钮。
+- 设置保存后，打开 WPS 或加载插件时自动加入协作。
+- 关闭工作簿或卸载插件时自动离开。
+- socket 断开时显示 10 秒倒计时并自动重连。
 
-Reason:
+原因：
 
-- The plugin should be a quiet safety layer, not another workflow users must remember.
-- Designers should not have to click "join" every time they open a table.
+- 插件应该是安静的安全层，不增加每天必须记住的流程。
+- 用户打开表时就应该得到协作提醒。
 
-Implications:
+影响：
 
-- Reconnect behavior is part of core UX.
-- Manual controls should focus on settings and reconnect, not room membership.
+- 重连是核心 UX。
+- 手动操作集中在设置和重连，不集中在房间成员关系。
 
-## 7. One WPS Instance May Open Multiple Workbooks
+## 7. 一个 WPS 实例可以打开多个工作簿
 
-Decision:
+决策：
 
-- The plugin scans all open workbooks.
-- It maintains one room/socket per open workbook.
-- The currently active workbook controls the visible panel state.
+- 插件扫描所有打开的工作簿。
+- 每个工作簿维护一个 room/socket。
+- 当前激活工作簿控制面板显示状态。
 
-Reason:
+原因：
 
-- WPS users often open several configuration tables at once.
-- Counting only the active workbook misses rooms.
-- Multiple open workbooks should not inflate unique online user count.
+- 用户经常同时打开多张配置表。
+- 只看激活工作簿会漏掉其他已打开表格的在线状态。
+- 多个打开工作簿不应该把同一个人算成多个唯一在线用户。
 
-Implications:
+影响：
 
-- Server needs to distinguish unique users from raw connections.
-- Dashboard should show room count and unique online user count separately.
-- Switching active workbook in WPS should switch panel context.
+- 服务端区分唯一用户数和连接数。
+- Dashboard 分别显示表格数量和唯一在线用户数。
+- WPS 切换激活工作簿时，面板状态跟随切换。
 
-## 8. Stable User ID, Mutable Display Name
+## 8. 稳定用户 ID 和可变显示信息
 
-Decision:
+决策：
 
-- Each user gets a stable local UID.
-- Changing display name does not change UID.
-- Name changes should update server and other clients without looking like a new user joined.
+- 每个用户有稳定本地 UID。
+- 修改用户名不会改变 UID。
+- 修改用户名或颜色通过 `userUpdate` 同步。
 
-Reason:
+原因：
 
-- Users may adjust names during setup.
-- Online count and contribution stats should follow the person, not the current display string.
+- 用户可能在设置里改名或换颜色。
+- 在线人数和贡献统计应该跟随同一个人，而不是跟随显示名。
 
-Implications:
+影响：
 
-- Persist user identity in localStorage.
-- Use UID for color assignment and user identity.
+- 用户身份存入 `localStorage`。
+- UID 用于身份、颜色自动分配和去重。
 
-## 9. Conflict Detection Is Address-Based For Now
+## 9. 冲突优先字段级，缺失元数据时退回地址级
 
-Decision:
+决策：
 
-Current conflict detection uses:
-
-```txt
-sheetName + address
-```
-
-Reason:
-
-- It is simple and useful for a first working version.
-- It directly detects two users editing the same visible cell.
-
-Known limitation:
-
-- Sorting, inserting rows, or moving data may make address-based conflicts noisy or incomplete.
-
-Future direction:
-
-Use:
+冲突 key 优先使用：
 
 ```txt
 sheetName + rowId + fieldName
 ```
 
-or another stable game-config identity.
+如果客户端没有提供 `rowId` 和 `fieldName`，退回：
 
-## 10. Highlighting Uses Cell Interior Color For First Version
+```txt
+sheetName + address
+```
 
-Decision:
+原因：
 
-- Remote selections and conflicts are highlighted by changing cell fill color.
-- Original colors are tracked and restored best-effort.
+- 配置表有稳定行 ID 和字段名时，字段级冲突更接近业务语义。
+- 普通表格或无法识别字段信息时，地址级冲突仍然简单可用。
 
-Reason:
+影响：
 
-- This is the easiest WPS API path for a first usable version.
+- 协议保留 `rowId` 和 `fieldName` 可选字段。
+- 面板展示时优先显示 `id + field`，无法解析时显示 `sheetName!address`。
 
-Known limitation:
+## 10. 协作高亮必须可关闭并尽量可清理
 
-- Complex workbook styles may be affected.
-- Future versions should consider borders, comments, overlays, or a separate visual layer if WPS supports it.
+决策：
 
-## 11. Server State Is In Memory
+- 设置里提供高亮开关。
+- 高亮开启时标记远端选区和冲突。
+- 保存工作簿前先清理协作高亮。
 
-Decision:
+原因：
 
-- Current server keeps rooms, presence, conflicts, and contribution counts in memory.
-- Restarting the server clears runtime state.
+- 高亮能让用户快速看到冲突位置。
+- WPS API 的视觉标记可能影响工作簿修改状态。
+- 用户需要能关闭高亮，避免干扰复杂样式表。
 
-Reason:
+影响：
 
-- Expected early team size is around 20 people.
-- The server is a coordination service, not the source of truth.
-- In-memory state keeps deployment simple.
+- 高亮逻辑必须尽量记录并恢复原样式。
+- 冲突视觉优先级高于普通远端选区。
 
-Future direction:
+## 11. 服务端状态保存在内存
 
-- Add persistence only if users need historical analytics or restart continuity.
+决策：
 
-## 12. Dashboard Is Operational, Not A Management Console
+- 当前服务端把房间、在线状态、选区、修改、冲突和贡献统计放在内存里。
+- 服务重启后清空运行时状态。
 
-Decision:
+原因：
 
-Dashboard should show:
+- 当前目标是实时提醒，不是历史审计系统。
+- 早期团队规模约 20 人，内存状态部署简单。
 
-- unique online users,
-- open spreadsheets,
-- users per spreadsheet,
-- edit contribution counts,
-- conflicts.
+影响：
 
-Reason:
+- Dashboard 上的编辑贡献度只代表本次服务启动后的统计。
+- 如果将来需要历史分析，再引入持久化。
 
-- The dashboard is mainly for the release machine/operator to understand current usage.
-- It should be simple and safe to expose internally.
+## 12. Dashboard 是运维看板，不是管理后台
 
-Implications:
+决策：
 
-- Avoid showing sensitive local details.
-- Do not make dashboard the primary user workflow.
+Dashboard 显示：
 
-## 13. GitHub Publishing State
+- 唯一在线用户。
+- 打开的表格。
+- 每张表里的用户。
+- 编辑贡献度。
+- 冲突数量。
+- GitHub 和安装插件入口。
 
-Decision:
+原因：
 
-- Do not assume upload is complete without a successful push.
+- Dashboard 主要给发布机或团队维护者快速了解当前使用情况。
+- 它应该简单、安全，避免变成主要工作流。
 
-Current known state:
+影响：
 
-- The project has been reorganized as a root monorepo.
-- `packages/addin/` contains the WPS add-in.
-- `packages/server/` contains the collaboration server.
-- `packages/shared/` contains shared protocol types and utilities.
-- The intended public GitHub repository name is `wps-anybody-here`.
-- Remote creation/push may still need to be completed by a later agent if the current toolset cannot create GitHub repositories.
+- 避免展示敏感本机信息。
+- 不在 Dashboard 上做复杂管理操作。
 
-Recommendation:
+## 13. 公开仓库和安装入口
 
-- Keep one public GitHub repository at the workspace root.
-- Push root-level docs, add-in, server, and shared package together.
+决策：
 
-## 14. Monorepo With npm Workspace
+- 公开仓库地址使用 `https://github.com/tadazly/wps-anybody-here`。
+- Dashboard 右上角提供 GitHub 跳转按钮。
+- Dashboard 右上角提供 `安装插件` 按钮，跳转同源 `/addin/publish.html`。
 
-Decision:
+原因：
 
-- Use one repository with npm workspaces.
-- Package layout:
+- 使用者可以从 Dashboard 直接找到源码和安装入口。
+- 插件发布资源由同一个协作服务托管，端口和源一致，便于部署。
+
+影响：
+
+- 不要声称代码已经推送，除非实际 push 成功。
+- 如果未来公开仓库地址改变，需要同步更新 Dashboard 和文档。
+
+## 14. npm workspace monorepo
+
+决策：
+
+- 使用一个 npm workspace 仓库。
+- 包结构：
   - `@wps-anybody-here/addin`
   - `@wps-anybody-here/server`
   - `@wps-anybody-here/shared`
 
-Reason:
+原因：
 
-- The add-in and server protocol are tightly coupled.
-- Early iterations frequently change both sides together.
-- A shared package prevents protocol type drift.
-- npm has a lower setup burden for public users because it ships with Node.js.
+- 加载项和服务端协议耦合紧密。
+- 早期迭代经常同时修改前后端。
+- 共享包可以避免协议类型漂移。
 
-Implications:
+影响：
 
-- Prefer root commands:
+- 优先使用根目录命令：
   - `npm run dev:server`
   - `npm run dev:addin`
+  - `npm run publish:addin`
   - `npm run build`
   - `npm run typecheck`
-- Put new protocol fields in `packages/shared/src/protocol.ts` first.
+- 新协议字段先放进 `packages/shared/src/protocol.ts`。

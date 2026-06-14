@@ -40,7 +40,14 @@ export function renderDashboardHtml() {
             color: #667085;
             font-size: 12px;
         }
-        .github-link {
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+        .header-link {
             display: inline-flex;
             align-items: center;
             gap: 6px;
@@ -54,11 +61,11 @@ export function renderDashboardHtml() {
             text-decoration: none;
             white-space: nowrap;
         }
-        .github-link:hover {
+        .header-link:hover {
             border-color: #98a2b3;
             background: #f8fafc;
         }
-        .github-link svg {
+        .header-link svg {
             flex: none;
         }
         main {
@@ -211,6 +218,7 @@ export function renderDashboardHtml() {
         }
         @media (max-width: 860px) {
             header { align-items: flex-start; flex-direction: column; }
+            .header-actions { justify-content: flex-start; }
             .dashboard-footer { flex-wrap: wrap; }
             .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .grid { grid-template-columns: 1fr; }
@@ -223,7 +231,10 @@ export function renderDashboardHtml() {
             <h1>表里有人 Dashboard</h1>
             <div class="sub">看看表里谁在配，谁在改，谁在和你撞格子</div>
         </div>
-        <a href="https://github.com/tadazly/wps-anybody-here" target="_blank" rel="noopener noreferrer" class="github-link navbar__item navbar__link">GitHub<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a>
+        <nav class="header-actions" aria-label="页面操作">
+            <a href="https://github.com/tadazly/wps-anybody-here" target="_blank" rel="noopener noreferrer" class="header-link navbar__item navbar__link">GitHub<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a>
+            <a href="/addin/publish.html" class="header-link">安装插件</a>
+        </nav>
     </header>
     <main>
         <section class="stats">
