@@ -11,6 +11,8 @@
   "scripts": {
     "dev:server": "npm run dev --workspace @wps-anybody-here/server",
     "dev:addin": "npm --prefix packages/addin run debug",
+    "publish:addin": "node scripts/publish-addin.js",
+    "start": "npm run build --workspace @wps-anybody-here/server && npm run start --workspace @wps-anybody-here/server",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
