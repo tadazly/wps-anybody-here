@@ -4,10 +4,13 @@ export function renderDashboardHtml() {
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>wps-anybody-here dashboard</title>
+    <title>表里有人 dashboard</title>
     <style>
         * { box-sizing: border-box; }
         body {
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
             margin: 0;
             background: #f6f8fb;
             color: #172033;
@@ -37,10 +40,54 @@ export function renderDashboardHtml() {
             color: #667085;
             font-size: 12px;
         }
+        .github-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            min-height: 34px;
+            padding: 0 12px;
+            border: 1px solid #d0d7de;
+            border-radius: 6px;
+            background: #fff;
+            color: #172033;
+            font-weight: 700;
+            text-decoration: none;
+            white-space: nowrap;
+        }
+        .github-link:hover {
+            border-color: #98a2b3;
+            background: #f8fafc;
+        }
+        .github-link svg {
+            flex: none;
+        }
         main {
+            flex: 1;
+            width: 100%;
             max-width: 1200px;
             margin: 0 auto;
-            padding: 20px 24px 36px;
+            padding: 20px 24px 28px;
+        }
+        .dashboard-footer {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 14px 24px 18px;
+            color: #667085;
+            font-size: 12px;
+            text-align: center;
+        }
+        .dashboard-footer .sub {
+            color: inherit;
+        }
+        .footer-separator {
+            width: 3px;
+            height: 3px;
+            border-radius: 50%;
+            background: #98a2b3;
         }
         .stats {
             display: grid;
@@ -164,6 +211,7 @@ export function renderDashboardHtml() {
         }
         @media (max-width: 860px) {
             header { align-items: flex-start; flex-direction: column; }
+            .dashboard-footer { flex-wrap: wrap; }
             .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .grid { grid-template-columns: 1fr; }
         }
@@ -175,7 +223,7 @@ export function renderDashboardHtml() {
             <h1>表里有人 Dashboard</h1>
             <div class="sub">看看表里谁在配，谁在改，谁在和你撞格子</div>
         </div>
-        <div id="updatedAt" class="sub">等待数据...</div>
+        <a href="https://github.com/tadazly/wps-anybody-here" target="_blank" rel="noopener noreferrer" class="github-link navbar__item navbar__link">GitHub<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a>
     </header>
     <main>
         <section class="stats">
@@ -201,6 +249,11 @@ export function renderDashboardHtml() {
             </div>
         </section>
     </main>
+    <footer class="dashboard-footer">
+        <div class="sub">Copyright © 2026 Tadazly.</div>
+        <span class="footer-separator" aria-hidden="true"></span>
+        <div id="updatedAt" class="sub">等待数据...</div>
+    </footer>
     <script>
         const fmtTime = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
