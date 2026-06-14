@@ -5,13 +5,16 @@ import {
     type ClientMsg,
     type ConflictInfo,
     type JoinMsg,
-    makeCellKey,
     type SelectionInfo,
     type SelectionMsg,
     type ServerMsg,
     type UserInfo,
 } from "@wps-anybody-here/shared";
 import type { ClientInfo, ContributionInfo, Room } from "./types";
+
+function makeCellKey(sheetName: string, address: string) {
+    return `${sheetName}::${address}`;
+}
 
 interface DashboardUser {
     userId: string;

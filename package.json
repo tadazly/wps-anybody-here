@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "dev:server": "npm run dev --workspace @wps-anybody-here/server",
-    "dev:addin": "npm run dev --workspace @wps-anybody-here/addin",
+    "dev:addin": "npm --prefix packages/addin run debug",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
