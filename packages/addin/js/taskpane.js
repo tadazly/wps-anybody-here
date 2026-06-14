@@ -1916,13 +1916,13 @@
             return;
         }
 
-        const shape = createSelectionLabelShape(sheet, range, userName, color, state.labels.length);
+        const shape = createSelectionLabelShape(sheet, range, userName, color);
         if (shape) {
             state.labels.push(shape);
         }
     }
 
-    function createSelectionLabelShape(sheet, range, userName, color, index) {
+    function createSelectionLabelShape(sheet, range, userName, color) {
         try {
             const shapes = sheet.Shapes;
             if (!shapes || typeof shapes.AddTextbox !== "function") {
@@ -1930,15 +1930,26 @@
             }
 
             const text = compactLabelText(userName);
-            const left = Number(range.Left || 0) + 1;
+            const left = readRangeNumberProperty(range, "Left");
+            const top = readRangeNumberProperty(range, "Top");
+            const cellWidth = readRangeNumberProperty(range, "Width");
+            if (left === null || top === null || cellWidth === null) {
+                return null;
+            }
+
             const labelHeight = calcSelectionLabelHeight(range);
-            const top = Number(range.Top || 0) + 0.5 + index * (labelHeight + 1);
-            const cellWidth = Math.max(SELECTION_LABEL_MIN_WIDTH, Number(range.Width || SELECTION_LABEL_MAX_WIDTH) - 2);
-            const width = calcSelectionLabelWidth(text, cellWidth);
-            const shape = shapes.AddTextbox(MSO_TEXT_ORIENTATION_HORIZONTAL, left, top, width, labelHeight);
+            const labelLeft = left + 1;
+            const labelTop = top + 0.5;
+            const availableWidth = Math.max(SELECTION_LABEL_MIN_WIDTH, cellWidth - 2);
+            const width = calcSelectionLabelWidth(text, availableWidth);
+            const shape = shapes.AddTextbox(MSO_TEXT_ORIENTATION_HORIZONTAL, labelLeft, labelTop, width, labelHeight);
             const wpsColor = cssHexToWpsColor(color);
 
-            writeWpsProperty(shape, "Name", `${SELECTION_LABEL_PREFIX}${Date.now()}_${index}`);
+            writeWpsProperty(shape, "Name", `${SELECTION_LABEL_PREFIX}${Date.now()}`);
+            writeWpsProperty(shape, "Left", labelLeft);
+            writeWpsProperty(shape, "Top", labelTop);
+            writeWpsProperty(shape, "Width", width);
+            writeWpsProperty(shape, "Height", labelHeight);
             setShapeText(shape, text);
             setShapeFill(shape, wpsColor);
             setShapeLine(shape, wpsColor);
@@ -1951,9 +1962,19 @@
     }
 
     function calcSelectionLabelHeight(range) {
-        const cellHeight = Number(range.Height || SELECTION_LABEL_MAX_HEIGHT * 3);
+        const cellHeight = readRangeNumberProperty(range, "Height") || SELECTION_LABEL_MAX_HEIGHT * 3;
         const maxHeight = Math.max(1, cellHeight / 3);
         return Math.min(SELECTION_LABEL_MAX_HEIGHT, Math.max(SELECTION_LABEL_MIN_HEIGHT, maxHeight));
+    }
+
+    function readRangeNumberProperty(range, propertyName) {
+        try {
+            const value = readRangeDisplayProperty(range, propertyName);
+            const number = Number(value);
+            return Number.isFinite(number) ? number : null;
+        } catch {
+            return null;
+        }
     }
 
     function calcSelectionLabelWidth(text, cellWidth) {
