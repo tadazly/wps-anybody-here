@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <JsPlugin>
   <ApiVersion>1.0.0</ApiVersion>
-  <Name>HelloEt</Name>
-  <Description>addon Description</Description>
+  <Name>表里有人</Name>
+  <Description>看看表里谁在配，谁在改，谁在和你撞格子。</Description>
   <Functions>
     <Uri>/functions.json</Uri>
-    <Namespace>HelloEt</Namespace>
+    <Namespace>AnybodyHere</Namespace>
   </Functions>
 </JsPlugin>

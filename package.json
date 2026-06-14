@@ -1,7 +1,7 @@
 {
 	"name": "wps-anybody-here",
 	"addonType": "et",
-	"version": "1.0.0",
+	"version": "0.1.0",
 	"scripts": {
 		"dev": "vite --port 3889",
 		"build": "vite build",
@@ -9,7 +9,7 @@
 		"lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs --fix --ignore-path .gitignore",
 		"format": "prettier --write src/"
 	},
-	"description": "wps加载项示例, 执行npm install后，提供代码联想功能",
+	"description": "WPS 表格协作提醒插件：显示同表在线用户、远端选区和地址级冲突。",
 	"devDependencies": {
 		"et-jsapi-declare": "latest",
 		"vite": "^5.3.1",

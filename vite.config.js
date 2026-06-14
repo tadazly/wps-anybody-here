@@ -16,7 +16,7 @@ export default defineConfig({
         functionsScanner({
             inputJsPath: 'js/functions.js',
             outputJsonPath: 'functions.json',
-            namespace: 'HelloEt',
+            namespace: 'AnybodyHere',
         }),
     ],
     resolve: {

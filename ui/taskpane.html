@@ -1,42 +1,522 @@
 <!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"></head>
-<script type="text/javascript" src="../js/util.js"></script>
-<script type="text/javascript" src="../js/taskpane.js"></script>
-<script type="text/javascript" src="../.debugTemp/wpsjsrpcsdk.js"></script>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>表里有人</title>
+    <script type="text/javascript" src="../js/util.js"></script>
+    <script type="text/javascript" src="../.debugTemp/wpsjsrpcsdk.js"></script>
+    <script type="text/javascript" src="../js/taskpane.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            background: #f8fafc;
+            color: #172033;
+            font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+            font-size: 13px;
+            line-height: 1.45;
+        }
+
+        button,
+        input {
+            font: inherit;
+        }
+
+        button {
+            border: 0;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.55;
+        }
+
+        .toast-root {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            z-index: 9999;
+            pointer-events: none;
+        }
+
+        .toast {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            width: 100%;
+            margin-bottom: 8px;
+            padding: 9px 12px;
+            border-radius: 8px;
+            background: rgba(23, 32, 51, 0.95);
+            color: #fff;
+            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+            transform: translateY(-8px);
+            opacity: 0;
+            animation: toast-in 160ms ease-out forwards;
+        }
+
+        .toast-dot {
+            width: 8px;
+            height: 8px;
+            margin-top: 5px;
+            border-radius: 50%;
+            flex: 0 0 auto;
+        }
+
+        .toast-title {
+            font-weight: 700;
+        }
+
+        .toast-sub {
+            display: block;
+            margin-top: 1px;
+            color: rgba(255, 255, 255, 0.72);
+            word-break: break-all;
+        }
+
+        .toast.leaving {
+            animation: toast-out 180ms ease-in forwards;
+        }
+
+        @keyframes toast-in {
+            from { transform: translateY(-8px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        @keyframes toast-out {
+            from { transform: translateY(0); opacity: 1; }
+            to { transform: translateY(-8px); opacity: 0; }
+        }
+
+        .panel {
+            min-height: 100vh;
+            padding: 12px;
+        }
+
+        .server-status {
+            display: grid;
+            grid-template-columns: 8px 1fr auto;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            margin-bottom: 12px;
+            padding: 9px 10px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            background: #f1f5f9;
+            color: #64748b;
+        }
+
+        .server-status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #94a3b8;
+        }
+
+        .server-status.connected {
+            background: #ecfdf5;
+            color: #047857;
+            border-color: #bbf7d0;
+        }
+
+        .server-status.connected .server-status-dot {
+            background: #22c55e;
+        }
+
+        .server-status.connecting,
+        .server-status.reconnecting {
+            background: #fffbeb;
+            color: #b45309;
+            border-color: #fde68a;
+        }
+
+        .server-status.connecting .server-status-dot,
+        .server-status.reconnecting .server-status-dot {
+            background: #f59e0b;
+        }
+
+        .reconnect-btn,
+        .ghost-btn {
+            padding: 5px 9px;
+            background: rgba(15, 23, 42, 0.08);
+            color: inherit;
+            white-space: nowrap;
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .title {
+            min-width: 0;
+        }
+
+        .title-main {
+            font-size: 18px;
+            font-weight: 800;
+            letter-spacing: 0;
+        }
+
+        .title-sub {
+            color: #64748b;
+            font-size: 12px;
+        }
+
+        .settings-btn {
+            padding: 6px 10px;
+            background: #e2e8f0;
+            color: #334155;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .settings-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 10000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 14px;
+            background: rgba(15, 23, 42, 0.42);
+        }
+
+        .settings-modal.open {
+            display: flex;
+        }
+
+        .settings-dialog {
+            width: 100%;
+            max-width: 420px;
+            max-height: calc(100vh - 28px);
+            overflow: auto;
+            padding: 16px;
+            border-radius: 8px;
+            background: #fff;
+            box-shadow: 0 18px 60px rgba(15, 23, 42, 0.28);
+        }
+
+        .settings-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .settings-title {
+            font-size: 16px;
+            font-weight: 800;
+        }
+
+        .settings-close {
+            display: inline-flex;
+            width: 28px;
+            height: 28px;
+            align-items: center;
+            justify-content: center;
+            background: #f1f5f9;
+            color: #475569;
+            font-size: 18px;
+            line-height: 1;
+        }
+
+        .settings-field {
+            margin-bottom: 11px;
+        }
+
+        .settings-field label {
+            display: block;
+            margin-bottom: 5px;
+            color: #334155;
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        .settings-field input {
+            width: 100%;
+            min-width: 0;
+            padding: 8px 9px;
+            border: 1px solid #cbd5e1;
+            border-radius: 7px;
+            background: #fff;
+            color: #172033;
+        }
+
+        .settings-field input:focus {
+            border-color: #2563eb;
+            outline: 2px solid rgba(37, 99, 235, 0.14);
+        }
+
+        .settings-hint {
+            margin-top: 4px;
+            color: #64748b;
+            font-size: 12px;
+        }
+
+        .settings-error {
+            display: none;
+            margin-bottom: 10px;
+            padding: 8px 10px;
+            border: 1px solid #fecaca;
+            border-radius: 7px;
+            background: #fff7f7;
+            color: #b91c1c;
+        }
+
+        .settings-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 14px;
+        }
+
+        .primary-btn {
+            padding: 7px 12px;
+            background: #2563eb;
+            color: #fff;
+            font-weight: 800;
+        }
+
+        .section {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        .section-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 8px;
+            color: #334155;
+            font-size: 12px;
+            font-weight: 800;
+            text-transform: uppercase;
+        }
+
+        .count-pill {
+            min-width: 22px;
+            padding: 1px 7px;
+            border-radius: 999px;
+            background: #e2e8f0;
+            color: #475569;
+            text-align: center;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .conflict-title {
+            color: #b91c1c;
+        }
+
+        .muted,
+        .empty {
+            color: #64748b;
+        }
+
+        .workbook-box {
+            padding: 9px 10px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            background: #fff;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            word-break: break-all;
+        }
+
+        .item {
+            display: grid;
+            grid-template-columns: 10px 1fr;
+            gap: 8px;
+            align-items: start;
+            width: 100%;
+            margin-bottom: 7px;
+            padding: 8px 9px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            background: #fff;
+        }
+
+        .item.clickable {
+            cursor: pointer;
+        }
+
+        .item.clickable:hover {
+            border-color: #94a3b8;
+            background: #f8fafc;
+        }
+
+        .user-dot {
+            width: 10px;
+            height: 10px;
+            margin-top: 5px;
+            border-radius: 50%;
+        }
+
+        .item-title {
+            font-weight: 700;
+            word-break: break-word;
+        }
+
+        .item-sub {
+            color: #64748b;
+            font-size: 12px;
+            word-break: break-all;
+        }
+
+        .conflict-item {
+            border-color: #fecaca;
+            background: #fff7f7;
+        }
+
+        .mini-map {
+            position: relative;
+            height: 260px;
+            overflow: hidden;
+            border: 1px solid #dbe3ef;
+            border-radius: 8px;
+            background: linear-gradient(#ffffff, #f1f5f9);
+        }
+
+        .mini-map-empty {
+            display: flex;
+            height: 100%;
+            align-items: center;
+            justify-content: center;
+            color: #94a3b8;
+        }
+
+        .marker {
+            position: absolute;
+            left: 5px;
+            right: 5px;
+            height: 4px;
+            border-radius: 999px;
+            cursor: pointer;
+            box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.08);
+        }
+
+        .log-list {
+            max-height: 110px;
+            overflow: auto;
+            padding: 8px 9px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            background: #fff;
+            color: #64748b;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
 <body>
-    <div class="global">
-        <div class="divItem">
-            这是一个网页，按<span style="font-weight: bolder;">"F12"</span>可以打开调试器。
+    <div id="toastRoot" class="toast-root"></div>
+
+    <main class="panel">
+        <div id="serverStatusBar" class="server-status offline">
+            <span class="server-status-dot"></span>
+            <span id="serverStatusText">未加入协作</span>
+            <button id="reconnectBtn" class="reconnect-btn" type="button">重连</button>
         </div>
-        <div class="divItem">
-            这个示例展示了wps加载项的相关基础能力，与B/S业务系统的交互，请用浏览器打开：
-            <span style="font-weight: bolder;color: slateblue;cursor:pointer" id="DemoSpan" onclick="shellExecuteByOAAssist(this.innerHTML)"></span>
+
+        <div class="header">
+            <div class="title">
+                <div class="title-main">表里有人</div>
+                <div class="title-sub">WPS 配表协作房间</div>
+            </div>
+            <button id="openSettingsBtn" class="settings-btn" type="button">设置</button>
         </div>
-        <div class="divItem">开发文档: <span style="font-weight: bolder;color: slateblue;">https://open.wps.cn/docs/office</span></div>
-        <hr>
-        <div class="divItem">
-            <button style="margin:3px;" onclick="onbuttonclick('dockLeft')">停靠左边</button>
-            <button style="margin:3px;" onclick="onbuttonclick('dockRight')">停靠右边</button>
-            <button style="margin:3px;" onclick="onbuttonclick('hideTaskPane')">隐藏TaskPane</button>
-            <button style="margin:3px;" onclick="onbuttonclick('addString')">文档开头添加字符串</button>
-            <button style="margin:3px;" onclick="onbuttonclick('getDocName')">取文件名</button>
+
+        <section class="section">
+            <div class="section-title">当前表格</div>
+            <div id="workbookName" class="workbook-box muted">未加入协作</div>
+        </section>
+
+        <section class="section">
+            <div class="section-title">
+                <span>在线用户</span>
+                <span id="userCount" class="count-pill">0</span>
+            </div>
+            <div id="userList" class="empty">暂无在线用户</div>
+        </section>
+
+        <section class="section">
+            <div class="section-title">
+                <span>远端选区</span>
+                <span id="selectionCount" class="count-pill">0</span>
+            </div>
+            <div id="selectionList" class="empty">暂无远端选区</div>
+        </section>
+
+        <section class="section">
+            <div class="section-title conflict-title">
+                <span>冲突</span>
+                <span id="conflictCount" class="count-pill">0</span>
+            </div>
+            <div id="conflictList" class="empty">暂无冲突</div>
+        </section>
+
+        <section class="section">
+            <div class="section-title">标记导航</div>
+            <div id="miniMap" class="mini-map">
+                <div class="mini-map-empty">暂无标记</div>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-title">运行日志</div>
+            <div id="logList" class="log-list">等待加入协作...</div>
+        </section>
+    </main>
+
+    <div id="settingsModal" class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+        <div class="settings-dialog">
+            <div class="settings-head">
+                <div id="settingsTitle" class="settings-title">协作设置</div>
+                <button id="closeSettingsBtn" class="settings-close" type="button" aria-label="关闭">×</button>
+            </div>
+
+            <div id="settingsError" class="settings-error"></div>
+
+            <div class="settings-field">
+                <label for="serverUrlInput">服务器 socket 地址</label>
+                <input id="serverUrlInput" type="text" spellcheck="false" placeholder="ws://127.0.0.1:18080">
+            </div>
+
+            <div class="settings-field">
+                <label for="repoUrlInput">表格仓库地址</label>
+                <input id="repoUrlInput" type="text" spellcheck="false" placeholder="例如：https://git.example.com/team/table">
+            </div>
+
+            <div class="settings-field">
+                <label for="repoRootInput">本地仓库根目录</label>
+                <input id="repoRootInput" type="text" spellcheck="false" placeholder="例如：D:\Project\table">
+            </div>
+
+            <div class="settings-field">
+                <label for="userNameInput">用户名</label>
+                <input id="userNameInput" type="text" spellcheck="false" placeholder="我的名字">
+            </div>
+
+            <div class="settings-actions">
+                <button id="saveSettingsBtn" class="primary-btn" type="button">保存设置</button>
+            </div>
         </div>
-        <hr>
-        <div class="divItem">文档文件名为：<span id="text_p"></span></div>
     </div>
 </body>
-
-<style>
-    .global{
-        font-size: 15px;
-        min-height: 95%;
-    }
-    .divItem{
-        margin-left: 5px;
-        margin-bottom: 18px;
-        font-size: 15px;
-        word-wrap:break-word;
-    }
-</style>
 </html>

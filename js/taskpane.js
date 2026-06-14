@@ -1,62 +1,1637 @@
-function onbuttonclick(idStr)
-{
-    if (typeof (window.Application.Enum) != "object") { // 如果没有内置枚举值
-        window.Application.Enum = WPS_Enum
-    }
-    switch(idStr)
-    {
-        case "dockLeft":{
-                let tsId = window.Application.PluginStorage.getItem("taskpane_id")
-                if (tsId){
-                    let tskpane = window.Application.GetTaskPane(tsId)
-                    tskpane.DockPosition = window.Application.Enum.msoCTPDockPositionLeft
-                }
-                break
-            }
-        case "dockRight":{
-            let tsId = window.Application.PluginStorage.getItem("taskpane_id")
-                if (tsId){
-                    let tskpane = window.Application.GetTaskPane(tsId)
-                    tskpane.DockPosition = window.Application.Enum.msoCTPDockPositionRight
-                }
-                break
-        }
-        case "hideTaskPane":{
-            let tsId = window.Application.PluginStorage.getItem("taskpane_id")
-                if (tsId){
-                    let tskpane = window.Application.GetTaskPane(tsId)
-                    tskpane.Visible = false
-                }
-                break
-        }
-        case "addString":{
-            let curSheet = window.Application.ActiveSheet;
-            if (curSheet){
-                curSheet.Cells.Item(1, 1).Formula="Hello, wps加载项!" + curSheet.Cells.Item(1, 1).Formula
-            }
-            break;
-        }
-        case "getDocName":{
-            let doc = window.Application.ActiveWorkbook
-                let textValue = "";
-                if (!doc){
-                    textValue = textValue + "当前没有打开任何文档"
-                    return
-                }
-                textValue = textValue + doc.Name
-                document.getElementById("text_p").innerHTML = textValue
-                break
-        }
-    }
-}
-
-window.onload = ()=>{
-    var xmlReq = WpsInvoke.CreateXHR();
-    var url = location.origin + "/.debugTemp/NotifyDemoUrl"
-    xmlReq.open("GET", url);
-    xmlReq.onload = function (res) {
-        var node = document.getElementById("DemoSpan");
-        window.document.getElementById("DemoSpan").innerHTML = res.target.responseText;
+(function () {
+    const DEFAULT_WS_URL = "ws://127.0.0.1:18080";
+    const STORAGE_KEYS = {
+        serverUrl: "wpsAnybodyHere.serverUrl",
+        user: "wpsAnybodyHere.user",
+        repoUrl: "wpsAnybodyHere.repoUrl",
+        repoRoot: "wpsAnybodyHere.repoRoot",
+        settingsSaved: "wpsAnybodyHere.settingsSaved",
     };
-    xmlReq.send();
-}
+
+    const USER_COLORS = [
+        "#4E7FFF",
+        "#16A34A",
+        "#F59E0B",
+        "#8B5CF6",
+        "#06B6D4",
+        "#EC4899",
+        "#84CC16",
+        "#F97316",
+        "#6366F1",
+        "#14B8A6",
+    ];
+
+    const RECONNECT_INTERVAL_MS = 10_000;
+    const HEARTBEAT_INTERVAL_MS = 5_000;
+    const SELECTION_THROTTLE_MS = 200;
+    const AUTO_JOIN_DELAY_MS = 500;
+    const AUTO_JOIN_RETRY_MS = 2000;
+    const CONFLICT_COLOR = "#ff4d4f";
+
+    const roomConnections = new Map();
+    let reconnectCountdownTimer = null;
+    let heartbeatTimer = null;
+    let selectionTimer = null;
+    let workbookScanTimer = null;
+    let autoJoinTimer = null;
+    let lastAutoJoinMessage = "";
+    let eventsBound = false;
+
+    let joined = false;
+    let manuallyClosed = false;
+    let roomId = "";
+    let workbookName = "";
+    let workbookFullName = "";
+    let myUser = null;
+    let currentUsers = [];
+    let conflicts = [];
+
+    const remoteSelections = new Map();
+    const originalColors = new Map();
+    const recentToastMap = new Map();
+
+    function $(id) {
+        return document.getElementById(id);
+    }
+
+    function log(message) {
+        const logList = $("logList");
+        if (!logList) {
+            return;
+        }
+
+        const time = new Date().toLocaleTimeString();
+        const line = `[${time}] ${message}`;
+        const old = logList.textContent === "等待加入协作..." ? "" : logList.textContent;
+        logList.textContent = [line, old].filter(Boolean).join("\n");
+    }
+
+    function hashString(str) {
+        let hash = 2166136261;
+
+        for (let i = 0; i < str.length; i++) {
+            hash ^= str.charCodeAt(i);
+            hash = Math.imul(hash, 16777619);
+        }
+
+        return hash >>> 0;
+    }
+
+    function colorFromSeed(seed) {
+        const hash = hashString(seed);
+        return USER_COLORS[hash % USER_COLORS.length];
+    }
+
+    function createUserId() {
+        const randomPart = Math.floor(Math.random() * 0xffffffff).toString(16);
+        return `local:${Date.now().toString(16)}${randomPart}`;
+    }
+
+    function loadUser() {
+        try {
+            const saved = JSON.parse(localStorage.getItem(STORAGE_KEYS.user) || "null");
+            if (saved && saved.userId && saved.userName) {
+                return {
+                    userId: saved.userId,
+                    userName: saved.userName,
+                    color: saved.color || colorFromSeed(saved.userId),
+                };
+            }
+        } catch {
+            // ignore
+        }
+
+        return null;
+    }
+
+    function saveUserName(name) {
+        const userName = name.trim();
+        if (!userName) {
+            alert("请先填写你的名字，其他人会用这个名字识别你。");
+            return null;
+        }
+
+        const current = myUser || loadUser();
+        const userId = current && current.userId ? current.userId : createUserId();
+        const user = {
+            userId,
+            userName,
+            color: colorFromSeed(userId),
+        };
+
+        const oldName = current && current.userName ? current.userName : "";
+        localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
+        myUser = user;
+        $("userNameInput").value = userName;
+
+        if (oldName !== userName) {
+            log(`当前身份：${userName}`);
+        }
+
+        return user;
+    }
+
+    function ensureUser() {
+        if (myUser) {
+            return myUser;
+        }
+
+        myUser = loadUser();
+        if (myUser) {
+            return myUser;
+        }
+
+        const inputName = $("userNameInput") ? $("userNameInput").value.trim() : "";
+        if (inputName) {
+            return saveUserName(inputName);
+        }
+
+        const fallbackName = getWpsUserName();
+        if (fallbackName) {
+            return saveUserName(fallbackName);
+        }
+
+        return saveUserName(`用户-${createUserId().slice(-4).toUpperCase()}`);
+    }
+
+    function getWpsUserName() {
+        try {
+            const app = getApp();
+            if (app && app.UserName) {
+                return String(app.UserName);
+            }
+        } catch {
+            // ignore
+        }
+
+        return "";
+    }
+
+    function getServerUrl() {
+        return (localStorage.getItem(STORAGE_KEYS.serverUrl) || DEFAULT_WS_URL).trim();
+    }
+
+    function normalizeRepoUrl(value) {
+        return String(value || "").trim().replace(/\/+$/, "");
+    }
+
+    function getRepoUrl() {
+        return normalizeRepoUrl(localStorage.getItem(STORAGE_KEYS.repoUrl) || "");
+    }
+
+    function getRepoRoot() {
+        return normalizeWorkbookPath(localStorage.getItem(STORAGE_KEYS.repoRoot) || "").replace(/\/$/, "");
+    }
+
+    function hasSavedSettings() {
+        return localStorage.getItem(STORAGE_KEYS.settingsSaved) === "1";
+    }
+
+    function setSettingsError(message) {
+        const el = $("settingsError");
+        if (!el) {
+            return;
+        }
+
+        el.textContent = message || "";
+        el.style.display = message ? "block" : "none";
+    }
+
+    function openSettingsModal(force) {
+        const modal = $("settingsModal");
+        if (!modal) {
+            return;
+        }
+
+        const firstRun = force && !hasSavedSettings();
+        $("serverUrlInput").value = getServerUrl();
+        $("repoUrlInput").value = firstRun ? "" : getRepoUrl();
+        $("repoRootInput").value = firstRun ? "" : getRepoRoot();
+        $("userNameInput").value = myUser ? myUser.userName : getWpsUserName();
+        modal.dataset.force = force ? "true" : "false";
+        modal.classList.add("open");
+        $("closeSettingsBtn").style.display = force ? "none" : "inline-flex";
+        setSettingsError("");
+        window.setTimeout(function () {
+            $("serverUrlInput").focus();
+        }, 0);
+    }
+
+    function closeSettingsModal() {
+        const modal = $("settingsModal");
+        if (!modal || modal.dataset.force === "true") {
+            return;
+        }
+
+        modal.classList.remove("open");
+        setSettingsError("");
+    }
+
+    function saveSettings() {
+        const serverUrl = $("serverUrlInput").value.trim() || DEFAULT_WS_URL;
+        const repoUrl = normalizeRepoUrl($("repoUrlInput").value);
+        const repoRoot = normalizeWorkbookPath($("repoRootInput").value.trim()).replace(/\/$/, "");
+        const userName = $("userNameInput").value.trim();
+
+        if (!serverUrl) {
+            setSettingsError("请填写服务器 socket 地址。");
+            return;
+        }
+        if (!repoUrl) {
+            setSettingsError("请填写表格仓库地址，用于区分不同项目的同名表。");
+            return;
+        }
+        if (!repoRoot) {
+            setSettingsError("请填写本地仓库根目录。");
+            return;
+        }
+        if (!userName) {
+            setSettingsError("请填写用户名。");
+            return;
+        }
+
+        const oldServerUrl = getServerUrl();
+        const oldRepoUrl = getRepoUrl();
+        const oldRepoRoot = getRepoRoot();
+
+        localStorage.setItem(STORAGE_KEYS.serverUrl, serverUrl);
+        localStorage.setItem(STORAGE_KEYS.repoUrl, repoUrl);
+        localStorage.setItem(STORAGE_KEYS.repoRoot, repoRoot);
+        localStorage.setItem(STORAGE_KEYS.settingsSaved, "1");
+        $("serverUrlInput").value = serverUrl;
+        $("repoUrlInput").value = repoUrl;
+        $("repoRootInput").value = repoRoot;
+
+        const user = saveUserName(userName);
+        if (!user) {
+            return;
+        }
+
+        $("settingsModal").dataset.force = "false";
+        $("settingsModal").classList.remove("open");
+        setSettingsError("");
+        log("协作设置已保存");
+
+        if (joined) {
+            if (oldRepoUrl !== repoUrl || oldRepoRoot !== repoRoot) {
+                restartWorkbookConnections();
+            } else if (oldServerUrl !== serverUrl) {
+                for (const connection of roomConnections.values()) {
+                    connectRoom(connection);
+                }
+            } else {
+                for (const connection of roomConnections.values()) {
+                    sendJoin(connection);
+                }
+            }
+        } else {
+            autoJoinRoom();
+        }
+    }
+
+    function bindCommitOnEnter(input, commit) {
+        input.addEventListener("keydown", function (event) {
+            if (event.key !== "Enter") {
+                return;
+            }
+
+            event.preventDefault();
+            commit();
+            input.blur();
+        });
+    }
+
+    function getApp() {
+        const app = window.Application || (window.wps && window.wps.Application);
+        if (!app) {
+            throw new Error("当前页面没有拿到 WPS Application 对象，请在 WPS 加载项任务窗格中打开。");
+        }
+
+        return app;
+    }
+
+    function getWorkbookInfo() {
+        const app = getApp();
+        const workbook = safeGet(function () {
+            return app.ActiveWorkbook;
+        }, null);
+
+        if (!workbook) {
+            throw new Error("当前没有打开任何表格。");
+        }
+
+        return getWorkbookInfoFromWorkbook(workbook);
+    }
+
+    function getWorkbookInfoFromWorkbook(workbook) {
+        const name = safeString(safeGet(function () {
+            return workbook.Name;
+        }, ""), "未命名表格");
+        const fullName = safeString(safeGet(function () {
+            return workbook.FullName;
+        }, ""), "") ||
+            joinPath(safeString(safeGet(function () {
+                return workbook.Path;
+            }, ""), ""), name) ||
+            name;
+
+        return {
+            name,
+            fullName,
+        };
+    }
+
+    function listOpenWorkbookInfos() {
+        const app = getApp();
+        const workbooks = safeGet(function () {
+            return app.Workbooks;
+        }, null);
+        const count = Number(safeGet(function () {
+            return workbooks ? workbooks.Count : 0;
+        }, 0)) || 0;
+        const infos = [];
+        const seen = new Set();
+
+        for (let i = 1; i <= count; i++) {
+            const workbook = safeGet(function () {
+                return workbooks.Item(i);
+            }, null);
+
+            if (!workbook) {
+                continue;
+            }
+
+            const info = getWorkbookInfoFromWorkbook(workbook);
+            const id = makeRoomId(info.fullName);
+            if (seen.has(id)) {
+                continue;
+            }
+
+            seen.add(id);
+            infos.push(info);
+        }
+
+        if (!infos.length) {
+            infos.push(getWorkbookInfo());
+        }
+
+        return infos;
+    }
+
+    function safeGet(fn, fallback) {
+        try {
+            const value = fn();
+            return value === undefined || value === null ? fallback : value;
+        } catch {
+            return fallback;
+        }
+    }
+
+    function safeString(value, fallback) {
+        try {
+            if (value === undefined || value === null) {
+                return fallback;
+            }
+            return String(value);
+        } catch {
+            return fallback;
+        }
+    }
+
+    function joinPath(path, name) {
+        if (!path) {
+            return name;
+        }
+
+        return `${path.replace(/[\\\/]+$/, "")}/${name}`;
+    }
+
+    function normalizeWorkbookPath(path) {
+        return String(path || "").replace(/\\/g, "/").replace(/\/+/g, "/");
+    }
+
+    function getRepoRelativePath(fullName) {
+        const normalized = normalizeWorkbookPath(fullName);
+        const root = getRepoRoot();
+        if (!root) {
+            return "";
+        }
+
+        const normalizedLower = normalized.toLowerCase();
+        const rootLower = root.toLowerCase();
+        if (normalizedLower === rootLower) {
+            return "";
+        }
+        if (normalizedLower.indexOf(rootLower + "/") !== 0) {
+            return "";
+        }
+
+        return normalized.slice(root.length + 1);
+    }
+
+    function makeRoomId(fullName) {
+        const fileId = getRepoRelativePath(fullName) || normalizeWorkbookPath(fullName);
+        const repoUrl = getRepoUrl();
+        return (repoUrl ? `${repoUrl}::${fileId}` : fileId).toLowerCase();
+    }
+
+    function setServerStatus(status, text) {
+        const bar = $("serverStatusBar");
+        const statusText = $("serverStatusText");
+        if (!bar || !statusText) {
+            return;
+        }
+
+        bar.className = `server-status ${status}`;
+        statusText.textContent = text || statusTextFromStatus(status);
+    }
+
+    function statusTextFromStatus(status) {
+        if (status === "connected") {
+            return "协作服务已连接";
+        }
+        if (status === "connecting") {
+            return "正在连接发布机...";
+        }
+        if (status === "reconnecting") {
+            return "发布机已下线，正在尝试重新连接...";
+        }
+        return "发布机已下线";
+    }
+
+    async function joinRoom() {
+        const user = ensureUser();
+        if (!user) {
+            return;
+        }
+
+        joined = true;
+        manuallyClosed = false;
+
+        bindWpsEvents();
+        syncOpenWorkbooks();
+        startWorkbookScanner();
+        startHeartbeat();
+    }
+
+    function leaveRoom() {
+        manuallyClosed = true;
+        joined = false;
+
+        stopWorkbookScanner();
+        clearReconnectTimers();
+        clearReconnectCountdown();
+        stopHeartbeat();
+        unbindWpsEvents();
+
+        for (const connection of roomConnections.values()) {
+            sendToConnection(connection, { type: "leave" });
+            closeConnection(connection);
+        }
+        roomConnections.clear();
+        roomId = "";
+        workbookName = "";
+        workbookFullName = "";
+        remoteSelections.clear();
+        conflicts = [];
+        currentUsers = [];
+        renderUsers([]);
+        renderSelections();
+        renderConflicts();
+        refreshHighlights();
+
+        setServerStatus("offline", "已离开协作房间");
+        log("已离开协作房间");
+    }
+
+    function restartWorkbookConnections() {
+        if (!joined) {
+            return;
+        }
+
+        for (const connection of roomConnections.values()) {
+            sendToConnection(connection, { type: "leave" });
+            closeConnection(connection);
+        }
+
+        roomConnections.clear();
+        roomId = "";
+        workbookName = "";
+        workbookFullName = "";
+        remoteSelections.clear();
+        conflicts = [];
+        currentUsers = [];
+        renderUsers([]);
+        renderSelections();
+        renderConflicts();
+        refreshHighlights();
+        syncOpenWorkbooks();
+    }
+
+    function syncOpenWorkbooks() {
+        if (!joined) {
+            return;
+        }
+
+        const activeInfo = getWorkbookInfo();
+        const activeRoomId = makeRoomId(activeInfo.fullName);
+        const infos = listOpenWorkbookInfos();
+        const openRoomIds = new Set();
+
+        for (const info of infos) {
+            const nextRoomId = makeRoomId(info.fullName);
+            openRoomIds.add(nextRoomId);
+
+            let connection = roomConnections.get(nextRoomId);
+            if (!connection) {
+                connection = createConnection(info);
+                roomConnections.set(nextRoomId, connection);
+                connectRoom(connection);
+            } else {
+                connection.workbookName = info.name;
+                connection.workbookFullName = info.fullName;
+            }
+        }
+
+        for (const entry of Array.from(roomConnections.entries())) {
+            const nextRoomId = entry[0];
+            const connection = entry[1];
+            if (!openRoomIds.has(nextRoomId)) {
+                sendToConnection(connection, { type: "leave" });
+                closeConnection(connection);
+                roomConnections.delete(nextRoomId);
+                log(`已移除关闭的表格房间：${connection.workbookName}`);
+            }
+        }
+
+        setActiveWorkbook(activeInfo);
+        updateServerStatus();
+    }
+
+    function createConnection(info) {
+        return {
+            socket: null,
+            roomId: makeRoomId(info.fullName),
+            workbookName: info.name,
+            workbookFullName: info.fullName,
+            users: [],
+            selections: new Map(),
+            conflicts: [],
+            reconnectTimer: null,
+            reconnectRemainSeconds: 0,
+        };
+    }
+
+    function setActiveWorkbook(info) {
+        const nextRoomId = makeRoomId(info.fullName);
+        const changed = roomId !== nextRoomId;
+
+        roomId = nextRoomId;
+        workbookName = info.name;
+        workbookFullName = info.fullName;
+
+        const workbookBox = $("workbookName");
+        workbookBox.textContent = workbookName;
+        workbookBox.title = workbookFullName;
+        workbookBox.classList.remove("muted");
+
+        if (changed) {
+            log(`当前表格切换为：${workbookName}`);
+        }
+
+        renderActiveRoomState();
+    }
+
+    function getActiveConnection() {
+        return roomId ? roomConnections.get(roomId) || null : null;
+    }
+
+    function connectServer() {
+        syncOpenWorkbooks();
+        const connection = getActiveConnection();
+        if (connection) {
+            connectRoom(connection);
+        }
+    }
+
+    function connectRoom(connection) {
+        if (!joined) {
+            return;
+        }
+
+        clearConnectionReconnectTimer(connection);
+
+        if (!window.WebSocket) {
+            setServerStatus("offline", "当前 WPS WebView 不支持 WebSocket");
+            log("当前 WPS WebView 不支持 WebSocket。");
+            scheduleReconnect(connection);
+            return;
+        }
+
+        closeConnection(connection);
+
+        const wsUrl = getServerUrl();
+        manuallyClosed = false;
+        updateServerStatus();
+
+        try {
+            connection.socket = new WebSocket(wsUrl);
+        } catch (err) {
+            log(`创建 WebSocket 失败：${err.message || err}`);
+            onConnectionDisconnected(connection);
+            return;
+        }
+
+        connection.socket.onopen = function () {
+            sendJoin(connection);
+            updateServerStatus();
+            showToast({
+                title: "协作服务已连接",
+                sub: connection.workbookName,
+                color: "#22c55e",
+                duration: 1800,
+            });
+            log(`已连接：${connection.workbookName} -> ${wsUrl}`);
+        };
+
+        connection.socket.onmessage = function (event) {
+            try {
+                handleServerMsg(connection, JSON.parse(event.data));
+            } catch (err) {
+                console.error("handle ws message failed", err);
+                log("收到无法解析的服务端消息");
+            }
+        };
+
+        connection.socket.onerror = function (event) {
+            console.error("websocket error", event);
+            log(`协作连接发生错误：${connection.workbookName}，请确认服务地址 ${wsUrl}`);
+        };
+
+        connection.socket.onclose = function (event) {
+            if (event && (event.code || event.reason)) {
+                log(`协作连接关闭：${connection.workbookName} code=${event.code || ""} ${event.reason || ""}`);
+            }
+            onConnectionDisconnected(connection);
+        };
+    }
+
+    function closeConnection(connection) {
+        if (!connection || !connection.socket) {
+            return;
+        }
+
+        connection.socket.onopen = null;
+        connection.socket.onmessage = null;
+        connection.socket.onerror = null;
+        connection.socket.onclose = null;
+
+        try {
+            connection.socket.close();
+        } catch {
+            // ignore
+        }
+
+        connection.socket = null;
+    }
+
+    function onConnectionDisconnected(connection) {
+        if (manuallyClosed) {
+            setServerStatus("offline", "已离开协作房间");
+            return;
+        }
+
+        connection.socket = null;
+        connection.users = [];
+        connection.selections.clear();
+        connection.conflicts = [];
+
+        if (connection.roomId === roomId) {
+            renderActiveRoomState();
+        }
+
+        updateServerStatus();
+        log(`发布机已下线或连接断开：${connection.workbookName}`);
+        scheduleReconnect(connection);
+    }
+
+    function scheduleReconnect(connection) {
+        if (!joined || !connection) {
+            return;
+        }
+
+        clearConnectionReconnectTimer(connection);
+        connection.reconnectRemainSeconds = Math.ceil(RECONNECT_INTERVAL_MS / 1000);
+        startReconnectCountdownTicker();
+        updateServerStatus();
+
+        connection.reconnectTimer = window.setTimeout(function () {
+            connection.reconnectTimer = null;
+            connection.reconnectRemainSeconds = 0;
+            stopReconnectCountdownTickerIfIdle();
+            connectRoom(connection);
+        }, RECONNECT_INTERVAL_MS);
+    }
+
+    function clearConnectionReconnectTimer(connection) {
+        if (connection && connection.reconnectTimer) {
+            window.clearTimeout(connection.reconnectTimer);
+            connection.reconnectTimer = null;
+            connection.reconnectRemainSeconds = 0;
+        }
+
+        stopReconnectCountdownTickerIfIdle();
+    }
+
+    function clearReconnectTimers() {
+        for (const connection of roomConnections.values()) {
+            clearConnectionReconnectTimer(connection);
+        }
+    }
+
+    function clearReconnectCountdown() {
+        if (reconnectCountdownTimer) {
+            window.clearInterval(reconnectCountdownTimer);
+            reconnectCountdownTimer = null;
+        }
+    }
+
+    function startReconnectCountdownTicker() {
+        if (reconnectCountdownTimer) {
+            return;
+        }
+
+        reconnectCountdownTimer = window.setInterval(function () {
+            let hasReconnect = false;
+
+            for (const connection of roomConnections.values()) {
+                if (!connection.reconnectTimer) {
+                    connection.reconnectRemainSeconds = 0;
+                    continue;
+                }
+
+                hasReconnect = true;
+                connection.reconnectRemainSeconds = Math.max(1, (connection.reconnectRemainSeconds || 1) - 1);
+            }
+
+            updateServerStatus();
+
+            if (!hasReconnect) {
+                clearReconnectCountdown();
+            }
+        }, 1000);
+    }
+
+    function stopReconnectCountdownTickerIfIdle() {
+        for (const connection of roomConnections.values()) {
+            if (connection.reconnectTimer) {
+                return;
+            }
+        }
+
+        clearReconnectCountdown();
+    }
+
+    function startHeartbeat() {
+        stopHeartbeat();
+        heartbeatTimer = window.setInterval(function () {
+            for (const connection of roomConnections.values()) {
+                sendToConnection(connection, { type: "heartbeat" });
+            }
+        }, HEARTBEAT_INTERVAL_MS);
+    }
+
+    function stopHeartbeat() {
+        if (heartbeatTimer) {
+            window.clearInterval(heartbeatTimer);
+            heartbeatTimer = null;
+        }
+    }
+
+    function sendJoin(connection) {
+        if (!joined || !connection || !connection.roomId || !myUser) {
+            return;
+        }
+
+        sendToConnection(connection, {
+            type: "join",
+            roomId: connection.roomId,
+            userId: myUser.userId,
+            userName: myUser.userName,
+            color: myUser.color,
+            workbookName: connection.workbookName,
+        });
+    }
+
+    function send(data) {
+        const connection = getActiveConnection();
+        return sendToConnection(connection, data);
+    }
+
+    function sendToConnection(connection, data) {
+        if (!connection || !connection.socket || connection.socket.readyState !== WebSocket.OPEN) {
+            return false;
+        }
+
+        try {
+            connection.socket.send(JSON.stringify(data));
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    function handleServerMsg(connection, msg) {
+        if (msg.type === "joined") {
+            connection.users = msg.users || [];
+            connection.selections.clear();
+
+            for (const selection of msg.selections || []) {
+                if (!myUser || selection.userId !== myUser.userId) {
+                    connection.selections.set(selection.userId, selection);
+                }
+            }
+
+            connection.conflicts = msg.conflicts || [];
+
+            if (connection.roomId === roomId) {
+                renderActiveRoomState();
+                refreshHighlights();
+            }
+
+            log(`房间同步完成：${connection.workbookName}，${connection.users.length} 人在线`);
+            return;
+        }
+
+        if (msg.type === "userJoined") {
+            if (myUser && msg.user.userId !== myUser.userId && shouldShowUserToast("join", msg.user.userId)) {
+                showToast({
+                    title: `${msg.user.userName} 加入了房间`,
+                    sub: msg.user.workbookName,
+                    color: msg.user.color,
+                    duration: 2600,
+                });
+                log(`${msg.user.userName} 加入了房间`);
+            }
+            return;
+        }
+
+        if (msg.type === "userLeft") {
+            if (myUser && msg.user.userId !== myUser.userId && shouldShowUserToast("left", msg.user.userId)) {
+                showToast({
+                    title: `${msg.user.userName} 离开了房间`,
+                    sub: msg.user.workbookName,
+                    color: msg.user.color,
+                    duration: 2200,
+                });
+                log(`${msg.user.userName} 离开了房间`);
+            }
+            return;
+        }
+
+        if (msg.type === "presence") {
+            connection.users = msg.users || [];
+            if (connection.roomId === roomId) {
+                renderActiveRoomState();
+            }
+            return;
+        }
+
+        if (msg.type === "selection") {
+            if (!myUser || msg.selection.userId !== myUser.userId) {
+                connection.selections.set(msg.selection.userId, msg.selection);
+                if (connection.roomId === roomId) {
+                    renderActiveRoomState();
+                    refreshHighlights();
+                }
+            }
+            return;
+        }
+
+        if (msg.type === "selectionRemoved") {
+            connection.selections.delete(msg.userId);
+            if (connection.roomId === roomId) {
+                renderActiveRoomState();
+                refreshHighlights();
+            }
+            return;
+        }
+
+        if (msg.type === "conflicts") {
+            connection.conflicts = msg.conflicts || [];
+            if (connection.roomId === roomId) {
+                renderActiveRoomState();
+                refreshHighlights();
+            }
+            return;
+        }
+
+        if (msg.type === "cellChange") {
+            return;
+        }
+
+        if (msg.type === "error") {
+            log(`服务端提示：${msg.message}`);
+        }
+    }
+
+    function renderActiveRoomState() {
+        const connection = getActiveConnection();
+        currentUsers = connection ? connection.users : [];
+
+        remoteSelections.clear();
+        if (connection) {
+            for (const selection of connection.selections.values()) {
+                remoteSelections.set(selection.userId, selection);
+            }
+        }
+
+        conflicts = connection ? connection.conflicts : [];
+        renderUsers(currentUsers);
+        renderSelections();
+        renderConflicts();
+    }
+
+    function updateServerStatus() {
+        if (!joined) {
+            setServerStatus("connecting", "正在自动加入协作...");
+            return;
+        }
+
+        const active = getActiveConnection();
+        if (!active) {
+            setServerStatus("connecting", "正在识别当前表格...");
+            return;
+        }
+
+        if (active.socket && active.socket.readyState === WebSocket.OPEN) {
+            setServerStatus("connected", "协作服务已连接");
+            return;
+        }
+
+        if (active.reconnectTimer) {
+            const seconds = Math.max(1, active.reconnectRemainSeconds || Math.ceil(RECONNECT_INTERVAL_MS / 1000));
+            setServerStatus("offline", `发布机已下线，${seconds}s 后重连`);
+            return;
+        }
+
+        setServerStatus("connecting", "正在连接发布机...");
+    }
+
+    function startWorkbookScanner() {
+        stopWorkbookScanner();
+        workbookScanTimer = window.setInterval(function () {
+            try {
+                syncOpenWorkbooks();
+            } catch (err) {
+                log(`扫描打开表格失败：${err.message || err}`);
+            }
+        }, 2000);
+    }
+
+    function stopWorkbookScanner() {
+        if (workbookScanTimer) {
+            window.clearInterval(workbookScanTimer);
+            workbookScanTimer = null;
+        }
+    }
+
+    function shouldShowUserToast(type, userId) {
+        const key = `${type}:${userId}`;
+        const now = Date.now();
+        const last = recentToastMap.get(key) || 0;
+
+        if (now - last < 5000) {
+            return false;
+        }
+
+        recentToastMap.set(key, now);
+        return true;
+    }
+
+    function showToast(options) {
+        const root = $("toastRoot");
+        if (!root) {
+            return;
+        }
+
+        const toast = document.createElement("div");
+        toast.className = "toast";
+
+        const dot = document.createElement("span");
+        dot.className = "toast-dot";
+        dot.style.background = options.color || "#4E7FFF";
+
+        const text = document.createElement("div");
+        const title = document.createElement("span");
+        title.className = "toast-title";
+        title.textContent = options.title;
+        text.appendChild(title);
+
+        if (options.sub) {
+            const sub = document.createElement("span");
+            sub.className = "toast-sub";
+            sub.textContent = options.sub;
+            text.appendChild(sub);
+        }
+
+        toast.appendChild(dot);
+        toast.appendChild(text);
+        root.appendChild(toast);
+
+        window.setTimeout(function () {
+            toast.classList.add("leaving");
+            window.setTimeout(function () {
+                toast.remove();
+            }, 220);
+        }, options.duration || 2600);
+    }
+
+    function renderUsers(users) {
+        const container = $("userList");
+        if (!container) {
+            return;
+        }
+
+        $("userCount").textContent = String(users.length);
+        container.innerHTML = "";
+        container.className = users.length ? "" : "empty";
+
+        if (!users.length) {
+            container.textContent = "暂无在线用户";
+            return;
+        }
+
+        for (const user of users) {
+            const div = document.createElement("div");
+            div.className = "item";
+
+            const dot = document.createElement("span");
+            dot.className = "user-dot";
+            dot.style.background = user.color;
+
+            const text = document.createElement("div");
+            const title = document.createElement("div");
+            title.className = "item-title";
+            title.textContent = `${user.userName}${myUser && user.userId === myUser.userId ? "（我）" : ""}`;
+
+            const sub = document.createElement("div");
+            sub.className = "item-sub";
+            sub.textContent = user.lastHeartbeatAt ? `在线，最后心跳 ${formatTime(user.lastHeartbeatAt)}` : "在线";
+
+            text.appendChild(title);
+            text.appendChild(sub);
+            div.appendChild(dot);
+            div.appendChild(text);
+            container.appendChild(div);
+        }
+    }
+
+    function renderSelections() {
+        const container = $("selectionList");
+        if (!container) {
+            return;
+        }
+
+        const selections = Array.from(remoteSelections.values());
+        $("selectionCount").textContent = String(selections.length);
+        container.innerHTML = "";
+        container.className = selections.length ? "" : "empty";
+
+        if (!selections.length) {
+            container.textContent = "暂无远端选区";
+            renderMiniMap();
+            return;
+        }
+
+        for (const selection of selections) {
+            const div = document.createElement("div");
+            div.className = "item clickable";
+            div.title = "点击跳转到该单元格";
+            div.onclick = function () {
+                jumpToCell(selection.sheetName, selection.address);
+            };
+
+            const dot = document.createElement("span");
+            dot.className = "user-dot";
+            dot.style.background = selection.color;
+
+            const text = document.createElement("div");
+            const title = document.createElement("div");
+            title.className = "item-title";
+            title.textContent = selection.userName;
+
+            const sub = document.createElement("div");
+            sub.className = "item-sub";
+            sub.textContent = `${selection.sheetName}!${selection.address}`;
+
+            text.appendChild(title);
+            text.appendChild(sub);
+            div.appendChild(dot);
+            div.appendChild(text);
+            container.appendChild(div);
+        }
+
+        renderMiniMap();
+    }
+
+    function renderConflicts() {
+        const container = $("conflictList");
+        if (!container) {
+            return;
+        }
+
+        $("conflictCount").textContent = String(conflicts.length);
+        container.innerHTML = "";
+        container.className = conflicts.length ? "" : "empty";
+
+        if (!conflicts.length) {
+            container.textContent = "暂无冲突";
+            renderMiniMap();
+            return;
+        }
+
+        for (const conflict of conflicts) {
+            const div = document.createElement("div");
+            div.className = "item clickable conflict-item";
+            div.title = "点击跳转到冲突单元格";
+            div.onclick = function () {
+                jumpToCell(conflict.sheetName, conflict.address);
+            };
+
+            const dot = document.createElement("span");
+            dot.className = "user-dot";
+            dot.style.background = CONFLICT_COLOR;
+
+            const text = document.createElement("div");
+            const title = document.createElement("div");
+            title.className = "item-title";
+            title.textContent = `${conflict.sheetName}!${conflict.address}`;
+
+            const sub = document.createElement("div");
+            sub.className = "item-sub";
+            sub.textContent = conflict.users.map(function (user) {
+                return `${user.userName}: ${formatValue(user.newValue)}`;
+            }).join(" / ");
+
+            text.appendChild(title);
+            text.appendChild(sub);
+            div.appendChild(dot);
+            div.appendChild(text);
+            container.appendChild(div);
+        }
+
+        renderMiniMap();
+    }
+
+    function formatValue(value) {
+        if (value === undefined) {
+            return "空";
+        }
+        if (value === null) {
+            return "空";
+        }
+        if (typeof value === "object") {
+            try {
+                return JSON.stringify(value);
+            } catch {
+                return String(value);
+            }
+        }
+        return String(value);
+    }
+
+    function formatTime(value) {
+        try {
+            return new Date(value).toLocaleTimeString();
+        } catch {
+            return "-";
+        }
+    }
+
+    function renderMiniMap() {
+        const miniMap = $("miniMap");
+        if (!miniMap) {
+            return;
+        }
+
+        miniMap.innerHTML = "";
+        const selections = Array.from(remoteSelections.values());
+
+        if (!selections.length && !conflicts.length) {
+            const empty = document.createElement("div");
+            empty.className = "mini-map-empty";
+            empty.textContent = "暂无标记";
+            miniMap.appendChild(empty);
+            return;
+        }
+
+        const maxRow = Math.max(1000, maxMarkerRow(selections, conflicts));
+        const panelHeight = 260;
+
+        for (const selection of selections) {
+            const marker = document.createElement("div");
+            marker.className = "marker";
+            marker.style.background = selection.color;
+            marker.style.top = `${calcMarkerTop(parseRowFromAddress(selection.address), maxRow, panelHeight)}px`;
+            marker.title = `${selection.userName}: ${selection.sheetName}!${selection.address}`;
+            marker.onclick = function () {
+                jumpToCell(selection.sheetName, selection.address);
+            };
+            miniMap.appendChild(marker);
+        }
+
+        for (const conflict of conflicts) {
+            const marker = document.createElement("div");
+            marker.className = "marker";
+            marker.style.background = CONFLICT_COLOR;
+            marker.style.height = "6px";
+            marker.style.top = `${calcMarkerTop(parseRowFromAddress(conflict.address), maxRow, panelHeight)}px`;
+            marker.title = `冲突: ${conflict.sheetName}!${conflict.address}`;
+            marker.onclick = function () {
+                jumpToCell(conflict.sheetName, conflict.address);
+            };
+            miniMap.appendChild(marker);
+        }
+    }
+
+    function maxMarkerRow(selections, conflictsList) {
+        let max = 1;
+        for (const selection of selections) {
+            max = Math.max(max, parseRowFromAddress(selection.address));
+        }
+        for (const conflict of conflictsList) {
+            max = Math.max(max, parseRowFromAddress(conflict.address));
+        }
+        return max;
+    }
+
+    function calcMarkerTop(rowIndex, maxRow, panelHeight) {
+        return Math.max(0, Math.min(panelHeight - 6, (rowIndex / maxRow) * panelHeight));
+    }
+
+    function parseRowFromAddress(address) {
+        const match = String(address).match(/\d+/);
+        return match ? Number(match[0]) : 1;
+    }
+
+    function normalizeAddress(address) {
+        return String(address || "")
+            .replace(/\$/g, "")
+            .replace(/^.*!/, "")
+            .trim();
+    }
+
+    function isManageableAddress(address) {
+        const normalized = normalizeAddress(address);
+        if (!normalized) {
+            return false;
+        }
+
+        if (!normalized.includes(":")) {
+            return true;
+        }
+
+        const parts = normalized.split(":");
+        return parts.length === 2 && parts[0] === parts[1];
+    }
+
+    function getSheetName(sheet) {
+        try {
+            if (sheet && sheet.Name) {
+                return String(sheet.Name);
+            }
+        } catch {
+            // ignore
+        }
+
+        try {
+            return String(getApp().ActiveSheet.Name);
+        } catch {
+            return "Sheet1";
+        }
+    }
+
+    function getRangeAddress(range) {
+        try {
+            return normalizeAddress(range.Address);
+        } catch {
+            return "";
+        }
+    }
+
+    function getRangeValue(range) {
+        try {
+            return range.Value;
+        } catch {
+            try {
+                return range.Formula;
+            } catch {
+                return undefined;
+            }
+        }
+    }
+
+    function bindWpsEvents() {
+        if (eventsBound) {
+            return;
+        }
+
+        const app = getApp();
+        if (!app.ApiEvent) {
+            log("当前 WPS 不支持 ApiEvent，无法同步选区和修改。");
+            return;
+        }
+
+        try {
+            app.ApiEvent.AddApiEventListener("SheetSelectionChange", onSheetSelectionChange);
+            app.ApiEvent.AddApiEventListener("SheetChange", onSheetChange);
+            app.ApiEvent.AddApiEventListener("WorkbookActivate", onWorkbookListChanged);
+            app.ApiEvent.AddApiEventListener("WorkbookOpen", onWorkbookListChanged);
+            app.ApiEvent.AddApiEventListener("NewWorkbook", onWorkbookListChanged);
+            app.ApiEvent.AddApiEventListener("WorkbookBeforeClose", onWorkbookBeforeClose);
+            eventsBound = true;
+            log("已绑定 WPS 工作簿、选区和修改事件");
+        } catch (err) {
+            log(`绑定 WPS 事件失败：${err.message || err}`);
+        }
+    }
+
+    function unbindWpsEvents() {
+        if (!eventsBound) {
+            return;
+        }
+
+        try {
+            const app = getApp();
+            app.ApiEvent.RemoveApiEventListener("SheetSelectionChange", onSheetSelectionChange);
+            app.ApiEvent.RemoveApiEventListener("SheetChange", onSheetChange);
+            app.ApiEvent.RemoveApiEventListener("WorkbookActivate", onWorkbookListChanged);
+            app.ApiEvent.RemoveApiEventListener("WorkbookOpen", onWorkbookListChanged);
+            app.ApiEvent.RemoveApiEventListener("NewWorkbook", onWorkbookListChanged);
+            app.ApiEvent.RemoveApiEventListener("WorkbookBeforeClose", onWorkbookBeforeClose);
+        } catch {
+            // ignore
+        }
+
+        eventsBound = false;
+    }
+
+    function onSheetSelectionChange(sheet, range) {
+        if (!joined) {
+            return;
+        }
+
+        if (selectionTimer) {
+            window.clearTimeout(selectionTimer);
+        }
+
+        selectionTimer = window.setTimeout(function () {
+            try {
+                syncOpenWorkbooks();
+            } catch (err) {
+                log(`同步当前表格失败：${err.message || err}`);
+            }
+
+            const address = getRangeAddress(range);
+            if (!isManageableAddress(address)) {
+                return;
+            }
+
+            send({
+                type: "selection",
+                sheetName: getSheetName(sheet),
+                address,
+            });
+        }, SELECTION_THROTTLE_MS);
+    }
+
+    function onSheetChange(sheet, range) {
+        if (!joined) {
+            return;
+        }
+
+        try {
+            syncOpenWorkbooks();
+        } catch (err) {
+            log(`同步当前表格失败：${err.message || err}`);
+        }
+
+        const address = getRangeAddress(range);
+        if (!isManageableAddress(address)) {
+            log(`跳过大范围修改：${address}`);
+            return;
+        }
+
+        send({
+            type: "cellChange",
+            sheetName: getSheetName(sheet),
+            address,
+            newValue: getRangeValue(range),
+        });
+    }
+
+    function onWorkbookBeforeClose() {
+        onWorkbookListChanged();
+    }
+
+    function onWorkbookListChanged() {
+        if (!joined) {
+            return;
+        }
+
+        window.setTimeout(function () {
+            try {
+                syncOpenWorkbooks();
+            } catch (err) {
+                log(`同步表格房间失败：${err.message || err}`);
+            }
+        }, 100);
+    }
+
+    async function jumpToCell(sheetName, address) {
+        try {
+            const app = getApp();
+            const sheet = app.Worksheets.Item(sheetName);
+            sheet.Activate();
+            const range = sheet.Range(address);
+            range.Select();
+        } catch (err) {
+            log(`跳转失败：${sheetName}!${address}`);
+            console.error(err);
+        }
+    }
+
+    async function refreshHighlights() {
+        try {
+            await clearOldHighlights();
+
+            for (const selection of remoteSelections.values()) {
+                await highlightCell(selection.sheetName, selection.address, selection.color);
+            }
+
+            for (const conflict of conflicts) {
+                await highlightCell(conflict.sheetName, conflict.address, CONFLICT_COLOR);
+            }
+        } catch (err) {
+            console.error("refreshHighlights failed", err);
+            log("刷新高亮失败，请在真实 WPS 环境中检查 API 兼容性。");
+        }
+    }
+
+    async function highlightCell(sheetName, address, color) {
+        if (!isManageableAddress(address)) {
+            return;
+        }
+
+        const app = getApp();
+        const sheet = app.Worksheets.Item(sheetName);
+        const range = sheet.Range(address);
+        const key = `${sheetName}!${address}`;
+
+        if (!originalColors.has(key)) {
+            try {
+                originalColors.set(key, range.Interior.Color || null);
+            } catch {
+                originalColors.set(key, null);
+            }
+        }
+
+        try {
+            range.Interior.Color = color;
+        } catch (err) {
+            console.error("highlightCell failed", err);
+        }
+    }
+
+    async function clearOldHighlights() {
+        const app = getApp();
+
+        for (const entry of originalColors.entries()) {
+            const key = entry[0];
+            const color = entry[1];
+            const sep = key.lastIndexOf("!");
+            const sheetName = key.slice(0, sep);
+            const address = key.slice(sep + 1);
+
+            if (!sheetName || !address) {
+                continue;
+            }
+
+            try {
+                const sheet = app.Worksheets.Item(sheetName);
+                const range = sheet.Range(address);
+                range.Interior.Color = color || "#ffffff";
+            } catch {
+                // ignore; sheet or cell may have disappeared
+            }
+        }
+
+        originalColors.clear();
+    }
+
+    function initControls() {
+        myUser = loadUser();
+        const settingsSaved = hasSavedSettings();
+
+        $("reconnectBtn").addEventListener("click", function () {
+            if (!hasSavedSettings()) {
+                openSettingsModal(true);
+                return;
+            }
+            if (joined) {
+                connectServer();
+            } else {
+                autoJoinRoom();
+            }
+        });
+
+        const serverUrlInput = $("serverUrlInput");
+        const repoUrlInput = $("repoUrlInput");
+        const repoRootInput = $("repoRootInput");
+        const userNameInput = $("userNameInput");
+
+        $("openSettingsBtn").addEventListener("click", function () {
+            openSettingsModal(false);
+        });
+        $("closeSettingsBtn").addEventListener("click", closeSettingsModal);
+        $("saveSettingsBtn").addEventListener("click", saveSettings);
+        $("settingsModal").addEventListener("click", function (event) {
+            if (event.target === $("settingsModal")) {
+                closeSettingsModal();
+            }
+        });
+
+        bindCommitOnEnter(serverUrlInput, saveSettings);
+        bindCommitOnEnter(repoUrlInput, saveSettings);
+        bindCommitOnEnter(repoRootInput, saveSettings);
+        bindCommitOnEnter(userNameInput, saveSettings);
+
+        window.addEventListener("beforeunload", leaveRoom);
+        window.addEventListener("unload", leaveRoom);
+
+        setServerStatus("connecting", settingsSaved ? "正在自动加入协作..." : "请先完成协作设置");
+        renderUsers([]);
+        renderSelections();
+        renderConflicts();
+
+        if (settingsSaved) {
+            window.setTimeout(autoJoinRoom, AUTO_JOIN_DELAY_MS);
+        } else {
+            window.setTimeout(function () {
+                openSettingsModal(true);
+            }, 0);
+        }
+    }
+
+    function autoJoinRoom() {
+        if (!hasSavedSettings()) {
+            setServerStatus("connecting", "请先完成协作设置");
+            openSettingsModal(true);
+            return;
+        }
+
+        if (joined) {
+            stopAutoJoinRetry();
+            return;
+        }
+
+        joinRoom().then(function () {
+            stopAutoJoinRetry();
+            log("已自动加入当前表格房间");
+        }).catch(function (err) {
+            const message = err.message || String(err);
+            logAutoJoinMessage(`自动加入未完成：${message}`);
+
+            startAutoJoinRetry();
+        });
+    }
+
+    function startAutoJoinRetry() {
+        if (autoJoinTimer || joined) {
+            return;
+        }
+
+        autoJoinTimer = window.setInterval(function () {
+            autoJoinRoom();
+        }, AUTO_JOIN_RETRY_MS);
+    }
+
+    function stopAutoJoinRetry() {
+        if (autoJoinTimer) {
+            window.clearInterval(autoJoinTimer);
+            autoJoinTimer = null;
+        }
+    }
+
+    function logAutoJoinMessage(message) {
+        if (message === lastAutoJoinMessage) {
+            return;
+        }
+
+        lastAutoJoinMessage = message;
+        log(message);
+    }
+
+    window.addEventListener("DOMContentLoaded", initControls);
+})();
