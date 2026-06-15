@@ -5,7 +5,7 @@
         user: "wpsAnybodyHere.user",
         repoUrl: "wpsAnybodyHere.repoUrl",
         repoRoot: "wpsAnybodyHere.repoRoot",
-        highlightRemoteCells: "wpsAnybodyHere.highlightRemoteCells",
+        highlightRemoteCells: "wpsAnybodyHere.highlightRemoteCellsFlag",
         ignoreExternalWorkbooks: "wpsAnybodyHere.ignoreExternalWorkbooks",
         settingsSaved: "wpsAnybodyHere.settingsSaved",
     };
@@ -27,6 +27,12 @@
     const HEARTBEAT_INTERVAL_MS = 5_000;
     const SELECTION_THROTTLE_MS = 200;
     const HIGHLIGHT_RETRY_MS = 800;
+    const HIGHLIGHT_MIN_INTERVAL_MS = 120;
+    const HIGHLIGHT_HEAVY_USER_THRESHOLD = 3;
+    const HIGHLIGHT_HEAVY_MARKER_THRESHOLD = 6;
+    const HIGHLIGHT_MAX_ROW_COLUMNS = 48;
+    const HIGHLIGHT_MAX_RETRY_COUNT = 5;
+    const HIGHLIGHT_MAX_RETRY_MS = 5000;
     const AUTO_JOIN_DELAY_MS = 500;
     const AUTO_JOIN_RETRY_MS = 2000;
     const CONFLICT_COLOR = "#ff4d4f";
@@ -56,6 +62,7 @@
     let heartbeatTimer = null;
     let selectionTimer = null;
     let highlightRetryTimer = null;
+    let highlightRefreshTimer = null;
     let workbookScanTimer = null;
     let autoJoinTimer = null;
     let lastAutoJoinMessage = "";
@@ -72,6 +79,10 @@
     let pendingCustomColor = "";
     let currentUsers = [];
     let conflicts = [];
+    let highlightRefreshing = false;
+    let highlightRefreshQueued = false;
+    let lastHighlightRefreshAt = 0;
+    let highlightRetryCount = 0;
 
     const remoteSelections = new Map();
     const originalHighlights = new Map();
@@ -315,7 +326,7 @@
     }
 
     function isRemoteCellHighlightEnabled() {
-        return localStorage.getItem(STORAGE_KEYS.highlightRemoteCells) !== "0";
+        return localStorage.getItem(STORAGE_KEYS.highlightRemoteCells) === "1";
     }
 
     function shouldIgnoreExternalWorkbooks() {
@@ -423,7 +434,7 @@
 
         if (oldHighlightRemoteCells !== highlightRemoteCells) {
             if (highlightRemoteCells) {
-                refreshHighlights();
+                queueRefreshHighlights();
             } else {
                 cleanupWorkbookHighlights();
             }
@@ -1107,7 +1118,7 @@
 
             if (connection.roomId === roomId) {
                 renderActiveRoomState();
-                refreshHighlights();
+                queueRefreshHighlights();
             }
 
             log(`房间同步完成：${connection.workbookName}，${connection.users.length} 人在线`);
@@ -1142,7 +1153,7 @@
             }
             if (connection.roomId === roomId) {
                 renderActiveRoomState();
-                refreshHighlights();
+                queueRefreshHighlights();
             }
             return;
         }
@@ -1160,7 +1171,7 @@
                 connection.selections.set(msg.selection.userId, msg.selection);
                 if (connection.roomId === roomId) {
                     renderActiveRoomState();
-                    refreshHighlights();
+                    queueRefreshHighlights();
                 }
             }
             return;
@@ -1170,7 +1181,7 @@
             connection.selections.delete(msg.userId);
             if (connection.roomId === roomId) {
                 renderActiveRoomState();
-                refreshHighlights();
+                queueRefreshHighlights();
             }
             return;
         }
@@ -1179,7 +1190,7 @@
             connection.conflicts = msg.conflicts || [];
             if (connection.roomId === roomId) {
                 renderActiveRoomState();
-                refreshHighlights();
+                queueRefreshHighlights();
             }
             return;
         }
@@ -2014,12 +2025,6 @@
         }
 
         selectionTimer = window.setTimeout(function () {
-            try {
-                syncOpenWorkbooks();
-            } catch (err) {
-                log(`同步当前表格失败：${err.message || err}`);
-            }
-
             const address = getRangeAddress(range);
             if (!isManageableAddress(address)) {
                 return;
@@ -2039,12 +2044,6 @@
     function onSheetChange(sheet, range) {
         if (!joined) {
             return;
-        }
-
-        try {
-            syncOpenWorkbooks();
-        } catch (err) {
-            log(`同步当前表格失败：${err.message || err}`);
         }
 
         const address = getRangeAddress(range);
@@ -2085,7 +2084,7 @@
         cleanupWorkbookHighlights();
 
         if (joined) {
-            window.setTimeout(refreshHighlights, 1000);
+            window.setTimeout(queueRefreshHighlights, 1000);
         }
     }
 
@@ -2100,7 +2099,7 @@
             try {
                 syncOpenWorkbooks();
                 renderActiveRoomState();
-                refreshHighlights();
+                queueRefreshHighlights();
             } catch (err) {
                 log(`同步表格房间失败：${err.message || err}`);
             }
@@ -2140,7 +2139,44 @@
         jumpToCell(conflict.sheetName, address);
     }
 
+    function queueRefreshHighlights() {
+        if (!joined && originalHighlights.size === 0) {
+            return;
+        }
+
+        if (highlightRefreshing) {
+            highlightRefreshQueued = true;
+            return;
+        }
+
+        if (highlightRefreshTimer) {
+            return;
+        }
+
+        const delay = Math.max(0, HIGHLIGHT_MIN_INTERVAL_MS - (Date.now() - lastHighlightRefreshAt));
+        highlightRefreshTimer = window.setTimeout(function () {
+            highlightRefreshTimer = null;
+            refreshHighlights();
+        }, delay);
+    }
+
+    function shouldUseLightweightHighlights() {
+        if (currentUsers.length >= HIGHLIGHT_HEAVY_USER_THRESHOLD) {
+            return true;
+        }
+
+        const selectionCount = Array.from(remoteSelections.values()).filter(shouldDisplaySelection).length;
+        return selectionCount + conflicts.length >= HIGHLIGHT_HEAVY_MARKER_THRESHOLD;
+    }
+
     async function refreshHighlights() {
+        if (highlightRefreshing) {
+            highlightRefreshQueued = true;
+            return;
+        }
+
+        highlightRefreshing = true;
+
         try {
             if (!isRemoteCellHighlightEnabled()) {
                 await clearOldHighlights();
@@ -2153,20 +2189,33 @@
                 return;
             }
 
+            const context = {
+                lightweight: shouldUseLightweightHighlights(),
+                sheetColumnCountCache: new Map(),
+            };
+
             for (const selection of remoteSelections.values()) {
-                await highlightSelectionCell(selection);
+                await highlightSelectionCell(selection, context);
             }
 
             for (const conflict of conflicts) {
-                await highlightConflictCell(conflict);
+                await highlightConflictCell(conflict, context);
             }
         } catch (err) {
             console.error("refreshHighlights failed", err);
             log("刷新高亮失败，请在真实 WPS 环境中检查 API 兼容性。");
+        } finally {
+            highlightRefreshing = false;
+            lastHighlightRefreshAt = Date.now();
+
+            if (highlightRefreshQueued) {
+                highlightRefreshQueued = false;
+                queueRefreshHighlights();
+            }
         }
     }
 
-    async function highlightSelectionCell(selection) {
+    async function highlightSelectionCell(selection, context) {
         const address = resolveSelectionLocalAddress(selection);
         if (!isManageableAddress(address)) {
             return;
@@ -2178,25 +2227,28 @@
         const key = `${selection.sheetName}!${address}`;
 
         try {
-            if (!highlightSelectionDataRow(selection, sheet, address)) {
+            if (!highlightSelectionDataRow(selection, sheet, address, context)) {
                 scheduleHighlightRetry();
                 return;
             }
 
             const state = rememberHighlightState(key, range);
-            if (!applyRangeBorder(range, selection.color, XL_BORDER_WEIGHT_MEDIUM)) {
+            const weight = context.lightweight ? XL_BORDER_WEIGHT_THIN : XL_BORDER_WEIGHT_MEDIUM;
+            if (!applyRangeBorder(range, selection.color, weight)) {
                 scheduleHighlightRetry();
                 return;
             }
 
-            addSelectionLabel(sheet, range, selection.userName, selection.color, state);
+            if (!context.lightweight) {
+                addSelectionLabel(sheet, range, selection.userName, selection.color, state);
+            }
         } catch (err) {
             console.error("highlightSelectionCell failed", err);
             scheduleHighlightRetry();
         }
     }
 
-    async function highlightConflictCell(conflict) {
+    async function highlightConflictCell(conflict, context) {
         const address = resolveConflictLocalAddress(conflict);
         if (!isManageableAddress(address)) {
             return;
@@ -2210,7 +2262,8 @@
         rememberHighlightState(key, range);
 
         try {
-            if (!applyRangeFill(range, CONFLICT_FILL_COLOR) || !applyRangeBorder(range, CONFLICT_BORDER_COLOR, XL_BORDER_WEIGHT_MEDIUM)) {
+            const fillApplied = context.lightweight ? true : applyRangeFill(range, CONFLICT_FILL_COLOR);
+            if (!fillApplied || !applyRangeBorder(range, CONFLICT_BORDER_COLOR, XL_BORDER_WEIGHT_MEDIUM)) {
                 scheduleHighlightRetry();
             }
         } catch (err) {
@@ -2257,6 +2310,12 @@
     }
 
     function cleanupWorkbookHighlights() {
+        if (highlightRefreshTimer) {
+            window.clearTimeout(highlightRefreshTimer);
+            highlightRefreshTimer = null;
+        }
+        highlightRefreshQueued = false;
+        clearHighlightRetry();
         clearOldHighlights();
         deleteAllSelectionLabelShapes();
     }
@@ -2266,10 +2325,13 @@
             return;
         }
 
+        const retryIndex = Math.min(highlightRetryCount, HIGHLIGHT_MAX_RETRY_COUNT);
+        const delay = Math.min(HIGHLIGHT_RETRY_MS * (2 ** retryIndex), HIGHLIGHT_MAX_RETRY_MS);
+        highlightRetryCount = retryIndex + 1;
         highlightRetryTimer = window.setTimeout(function () {
             highlightRetryTimer = null;
-            refreshHighlights();
-        }, HIGHLIGHT_RETRY_MS);
+            queueRefreshHighlights();
+        }, delay);
     }
 
     function clearHighlightRetry() {
@@ -2277,6 +2339,7 @@
             window.clearTimeout(highlightRetryTimer);
             highlightRetryTimer = null;
         }
+        highlightRetryCount = 0;
     }
 
     function rememberHighlightState(key, range) {
@@ -2376,8 +2439,23 @@
         return restored;
     }
 
-    function highlightSelectionDataRow(selection, sheet, address) {
+    function getSheetHighlightColumnCount(sheet, sheetName, context) {
+        if (context.sheetColumnCountCache.has(sheetName)) {
+            return context.sheetColumnCountCache.get(sheetName);
+        }
+
+        const usedColumns = getRangeCollectionCount(getSheetUsedRange(sheet), "Columns");
+        const count = Math.max(1, Math.min(HIGHLIGHT_MAX_ROW_COLUMNS, usedColumns || HIGHLIGHT_MAX_ROW_COLUMNS));
+        context.sheetColumnCountCache.set(sheetName, count);
+        return count;
+    }
+
+    function highlightSelectionDataRow(selection, sheet, address, context) {
         if (!selection.rowId || !isGameConfigSheet(selection.sheetName)) {
+            return true;
+        }
+
+        if (context.lightweight) {
             return true;
         }
 
@@ -2387,17 +2465,11 @@
         }
 
         const fillColor = blendCssHexWithWhite(selection.color, 0.86);
-        const colCount = Math.max(1, getRangeCollectionCount(getSheetUsedRange(sheet), "Columns") || 256);
-        let applied = true;
-
-        for (let col = 1; col <= colCount; col++) {
-            const cellAddress = `${columnIndexToName(col)}${rowIndex}`;
-            const cell = sheet.Range(cellAddress);
-            rememberHighlightState(`${selection.sheetName}!${cellAddress}`, cell);
-            applied = applyRangeFill(cell, fillColor) && applied;
-        }
-
-        return applied;
+        const colCount = getSheetHighlightColumnCount(sheet, selection.sheetName, context);
+        const rowAddress = `A${rowIndex}:${columnIndexToName(colCount)}${rowIndex}`;
+        const rowRange = sheet.Range(rowAddress);
+        rememberHighlightState(`${selection.sheetName}!${rowAddress}`, rowRange);
+        return applyRangeFill(rowRange, fillColor);
     }
 
     function applyRangeFill(range, color) {
@@ -2871,28 +2943,10 @@
 
         try {
             target[propertyName] = value;
-            return wpsPropertyMatches(target, propertyName, value);
+            return true;
         } catch {
             return false;
         }
-    }
-
-    function wpsPropertyMatches(target, propertyName, expected) {
-        const actual = readWpsProperty(target, propertyName);
-        if (actual === undefined || actual === null) {
-            return false;
-        }
-
-        if (typeof expected === "number") {
-            const actualNumber = Number(actual);
-            return Number.isFinite(actualNumber) && Math.abs(actualNumber - expected) < 0.001;
-        }
-
-        if (typeof expected === "boolean") {
-            return Boolean(actual) === expected;
-        }
-
-        return String(actual) === String(expected);
     }
 
     function blendCssHexWithWhite(color, whiteRatio) {
