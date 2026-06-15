@@ -17,6 +17,8 @@
 - 发布类型：在线模式
 - publish 页面多用户使用：是
 
+发布成功后，脚本还会同步更新 `scripts/mac-install.sh`：`url` 写入本次 `/addin/` 发布地址，`install` 写入同源根地址，供 Mac 用户手动安装。
+
 默认端口是 `18080`：
 
 ```bash

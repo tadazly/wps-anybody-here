@@ -68,6 +68,96 @@ export function renderDashboardHtml() {
         .header-link svg {
             flex: none;
         }
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            z-index: 10;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(15, 23, 42, 0.48);
+        }
+        .modal-backdrop.show {
+            display: flex;
+        }
+        .modal {
+            width: min(560px, 100%);
+            border: 1px solid #dbe3ef;
+            border-radius: 12px;
+            background: #fff;
+            box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
+        }
+        .modal-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 18px 20px 10px;
+        }
+        .modal-title {
+            margin: 0;
+            font-size: 18px;
+        }
+        .modal-close {
+            border: 0;
+            background: transparent;
+            color: #667085;
+            cursor: pointer;
+            font-size: 24px;
+            line-height: 1;
+        }
+        .modal-body {
+            padding: 0 20px 20px;
+        }
+        .modal-body p {
+            margin: 8px 0;
+        }
+        .command-box {
+            position: relative;
+            margin: 12px 0;
+            border: 1px solid #d0d7de;
+            border-radius: 8px;
+            background: #0f172a;
+        }
+        .command-box pre {
+            margin: 0;
+            overflow-x: auto;
+            padding: 14px 86px 14px 14px;
+            color: #e2e8f0;
+            font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+            user-select: text;
+            white-space: pre;
+        }
+        .copy-button {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            min-height: 28px;
+            padding: 0 10px;
+            border: 1px solid rgba(226, 232, 240, 0.32);
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #f8fafc;
+            cursor: pointer;
+            font-weight: 700;
+        }
+        .modal-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 14px;
+        }
+        .primary-link {
+            border-color: #2563eb;
+            background: #2563eb;
+            color: #fff;
+        }
+        .primary-link:hover {
+            border-color: #1d4ed8;
+            background: #1d4ed8;
+        }
         main {
             flex: 1;
             width: 100%;
@@ -233,7 +323,7 @@ export function renderDashboardHtml() {
         </div>
         <nav class="header-actions" aria-label="页面操作">
             <a href="https://github.com/tadazly/wps-anybody-here" target="_blank" rel="noopener noreferrer" class="header-link navbar__item navbar__link">GitHub<svg width="13.5" height="13.5" aria-hidden="true" viewBox="0 0 24 24" class="iconExternalLink_nPIU"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"></path></svg></a>
-            <a href="/install" class="header-link">安装插件</a>
+            <a href="/addin/publish.html" id="installLink" class="header-link">安装插件</a>
         </nav>
     </header>
     <main>
@@ -265,6 +355,32 @@ export function renderDashboardHtml() {
         <span class="footer-separator" aria-hidden="true"></span>
         <div id="updatedAt" class="sub">等待数据...</div>
     </footer>
+    <div id="macInstallModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="macInstallTitle">
+        <div class="modal">
+            <div class="modal-head">
+                <div>
+                    <h2 id="macInstallTitle" class="modal-title">Mac 手动安装插件</h2>
+                    <div class="sub">WPS Mac 在线安装加载项有兼容问题，需要下载脚本后手动执行。</div>
+                </div>
+                <button type="button" id="macInstallClose" class="modal-close" aria-label="关闭">×</button>
+            </div>
+            <div class="modal-body">
+                <p>1. 先点击下面的“下载 Mac 安装脚本”。</p>
+                <p>2. 打开终端，进入下载目录后执行：</p>
+                <div class="command-box">
+                    <pre id="macInstallCommand">cd ~/Downloads
+chmod +x mac-install.sh
+./mac-install.sh</pre>
+                    <button type="button" id="copyMacInstallCommand" class="copy-button">复制</button>
+                </div>
+                <p class="sub">执行完成后，请完全退出 WPS（Dock 右键退出），再重新打开生效。</p>
+                <div class="modal-actions">
+                    <a href="/install/mac-install.sh" download="mac-install.sh" class="header-link primary-link">下载 Mac 安装脚本</a>
+                    <button type="button" id="macInstallCancel" class="header-link">稍后再说</button>
+                </div>
+            </div>
+        </div>
+    </div>
     <script>
         const fmtTime = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
@@ -378,6 +494,68 @@ export function renderDashboardHtml() {
             }
         }
 
+        function isMac() {
+            const platform = navigator.userAgentData?.platform || navigator.platform || "";
+            const ua = navigator.userAgent || "";
+            return /mac/i.test(platform) || /macintosh|mac os x/i.test(ua);
+        }
+
+        function closeMacInstallModal() {
+            document.getElementById("macInstallModal")?.classList.remove("show");
+        }
+
+        function openMacInstallModal() {
+            document.getElementById("macInstallModal")?.classList.add("show");
+        }
+
+        async function copyMacInstallCommand() {
+            const button = document.getElementById("copyMacInstallCommand");
+            const commandNode = document.getElementById("macInstallCommand");
+            const command = commandNode?.textContent || "";
+
+            try {
+                await navigator.clipboard.writeText(command);
+                if (button) {
+                    button.textContent = "已复制";
+                    setTimeout(() => { button.textContent = "复制"; }, 1500);
+                }
+            } catch {
+                if (commandNode) {
+                    window.getSelection()?.selectAllChildren(commandNode);
+                }
+            }
+        }
+
+        function setupMacInstallModal() {
+            document.getElementById("macInstallClose")?.addEventListener("click", closeMacInstallModal);
+            document.getElementById("macInstallCancel")?.addEventListener("click", closeMacInstallModal);
+            document.getElementById("copyMacInstallCommand")?.addEventListener("click", copyMacInstallCommand);
+            document.getElementById("macInstallModal")?.addEventListener("click", event => {
+                if (event.target === event.currentTarget) {
+                    closeMacInstallModal();
+                }
+            });
+            document.addEventListener("keydown", event => {
+                if (event.key === "Escape") {
+                    closeMacInstallModal();
+                }
+            });
+        }
+
+        function setupInstallLink() {
+            const link = document.getElementById("installLink");
+            if (!link || !isMac()) {
+                return;
+            }
+
+            link.addEventListener("click", event => {
+                event.preventDefault();
+                openMacInstallModal();
+            });
+        }
+
+        setupMacInstallModal();
+        setupInstallLink();
         refresh();
         setInterval(refresh, 2000);
     </script>

@@ -107,10 +107,12 @@ PowerShell 也可以用环境变量：
 $env:ADDIN_PUBLISH_URL="http://192.168.1.20:18080"; npm run publish:addin
 ```
 
+发布成功后会同步更新 `scripts/mac-install.sh` 里的 `plugin_content`：`url` 指向 `/addin/` 发布地址，`install` 指向同源根地址。Mac 用户从 Dashboard 点击“安装插件”会下载该脚本，并需要在终端手动执行安装。
+
 发布产物由协作服务托管在：
 
 ```txt
-插件安装页: http://127.0.0.1:18080/install
+插件安装页: http://127.0.0.1:18080/addin/publish.html
 插件静态资源: http://127.0.0.1:18080/addin/
 ```
 

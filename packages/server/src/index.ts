@@ -10,6 +10,7 @@ const port = Number(process.env.PORT || 18080);
 const addinPackageDir = process.env.ADDIN_PACKAGE_DIR || path.resolve(__dirname, "../../addin");
 const addinPublishDir = path.join(addinPackageDir, "wps-addon-publish");
 const addinBuildDir = path.join(addinPackageDir, "wps-addon-build");
+const macInstallScript = process.env.MAC_INSTALL_SCRIPT || path.resolve(__dirname, "../../../scripts/mac-install.sh");
 
 const roomManager = new RoomManager();
 
@@ -43,7 +44,7 @@ function requestPath(req: http.IncomingMessage) {
     }
 }
 
-function sendFile(res: http.ServerResponse, filePath: string) {
+function sendFile(res: http.ServerResponse, filePath: string, headers: http.OutgoingHttpHeaders = {}) {
     const stream = fs.createReadStream(filePath);
     stream.on("error", () => {
         if (!res.headersSent) {
@@ -55,29 +56,32 @@ function sendFile(res: http.ServerResponse, filePath: string) {
     res.writeHead(200, {
         "content-type": contentTypeFor(filePath),
         "cache-control": path.extname(filePath).toLowerCase() === ".html" ? "no-store" : "public, max-age=60",
+        ...headers,
     });
     stream.pipe(res);
 }
 
-function tryServeInstallPage(pathname: string, res: http.ServerResponse) {
-    if (pathname !== "/install" && pathname !== "/install/" && pathname !== "/install/publish.html") {
+function tryServeMacInstallScript(pathname: string, res: http.ServerResponse) {
+    if (pathname !== "/install/mac-install.sh") {
         return false;
     }
 
-    const filePath = path.join(addinPublishDir, "publish.html");
-
     try {
-        const stat = fs.statSync(filePath);
+        const stat = fs.statSync(macInstallScript);
         if (stat.isFile()) {
-            sendFile(res, filePath);
+            sendFile(res, macInstallScript, {
+                "content-type": "text/x-shellscript; charset=utf-8",
+                "content-disposition": "attachment; filename=\"mac-install.sh\"",
+                "cache-control": "no-store",
+            });
             return true;
         }
     } catch {
-        // Fall through to the install-specific 404 below.
+        // Fall through to the script-specific 404 below.
     }
 
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-    res.end("Add-in install page not found. Run npm run publish:addin first.");
+    res.end("Mac install script not found.");
     return true;
 }
 
@@ -92,23 +96,38 @@ function tryServeAddinStatic(pathname: string, res: http.ServerResponse) {
         return false;
     }
 
-    const relativePath = pathname.slice("/addin/".length) || "index.html";
-    const filePath = path.join(addinBuildDir, relativePath);
+    const relativePath = pathname.slice("/addin/".length) || "publish.html";
+    const candidates = [
+        { root: addinPublishDir, filePath: path.join(addinPublishDir, relativePath) },
+        { root: addinBuildDir, filePath: path.join(addinBuildDir, relativePath) },
+    ];
 
-    if (isPathInside(addinBuildDir, filePath)) {
+    if (relativePath.startsWith("wps-addon-publish/")) {
+        candidates.push({ root: addinPublishDir, filePath: path.join(addinPackageDir, relativePath) });
+    }
+
+    if (relativePath.startsWith("wps-addon-build/")) {
+        candidates.push({ root: addinBuildDir, filePath: path.join(addinPackageDir, relativePath) });
+    }
+
+    for (const candidate of candidates) {
+        if (!isPathInside(candidate.root, candidate.filePath)) {
+            continue;
+        }
+
         try {
-            const stat = fs.statSync(filePath);
+            const stat = fs.statSync(candidate.filePath);
             if (stat.isFile()) {
-                sendFile(res, filePath);
+                sendFile(res, candidate.filePath);
                 return true;
             }
         } catch {
-            // Fall through to the add-in build 404 below.
+            // Try the next publish output location.
         }
     }
 
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-    res.end("Add-in build asset not found. Run npm run publish:addin first.");
+    res.end("Add-in publish asset not found. Run npm run publish:addin first.");
     return true;
 }
 
@@ -150,7 +169,7 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    if (tryServeInstallPage(url, res) || tryServeAddinStatic(url, res)) {
+    if (tryServeMacInstallScript(url, res) || tryServeAddinStatic(url, res)) {
         return;
     }
 
@@ -181,7 +200,6 @@ setInterval(() => {
 server.listen(port, () => {
     console.log(`wps-anybody-here server listening on ws://127.0.0.1:${port}`);
     console.log(`dashboard: http://127.0.0.1:${port}/`);
-    console.log(`add-in install page: http://127.0.0.1:${port}/install`);
     console.log(`add-in assets: http://127.0.0.1:${port}/addin/`);
     console.log(`health check: http://127.0.0.1:${port}/health`);
 });

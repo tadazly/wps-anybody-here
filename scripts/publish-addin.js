@@ -6,6 +6,7 @@ const repoRoot = path.resolve(__dirname, "..");
 const addinDir = path.join(repoRoot, "packages", "addin");
 const addinBuildDir = path.join(addinDir, "wps-addon-build");
 const addinPublishDir = path.join(addinDir, "wps-addon-publish");
+const macInstallScript = path.join(repoRoot, "scripts", "mac-install.sh");
 const args = process.argv.slice(2);
 
 function namedArgValue(name, alias) {
@@ -79,6 +80,25 @@ function normalizePublishBaseUrl(value) {
     }
 }
 
+function installUrlFor(publishUrl) {
+    try {
+        return new URL(publishUrl).origin;
+    } catch {
+        console.error(`Invalid publish URL: ${publishUrl}`);
+        process.exit(1);
+    }
+}
+
+function escapeXmlAttribute(value) {
+    return String(value).replace(/[&<>"']/g, ch => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&apos;",
+    }[ch]));
+}
+
 function removePreviousPublishOutput() {
     for (const dir of [addinBuildDir, addinPublishDir]) {
         if (fs.existsSync(dir)) {
@@ -86,6 +106,39 @@ function removePreviousPublishOutput() {
             console.log(`Removed previous publish output: ${path.relative(repoRoot, dir)}`);
         }
     }
+}
+
+function updateMacInstallScript(publishUrl) {
+    if (!fs.existsSync(macInstallScript)) {
+        console.warn(`Mac install script not found: ${path.relative(repoRoot, macInstallScript)}`);
+        return;
+    }
+
+    const escapedPublishUrl = escapeXmlAttribute(publishUrl);
+    const escapedInstallUrl = escapeXmlAttribute(installUrlFor(publishUrl));
+    const content = fs.readFileSync(macInstallScript, "utf8");
+    const updated = content.replace(
+        /plugin_content='([^']*)'/,
+        (match, pluginContent) => {
+            const updatedPluginContent = pluginContent
+                .replace(/\burl="[^"]*"/, `url="${escapedPublishUrl}"`)
+                .replace(/\binstall="[^"]*"/, `install="${escapedInstallUrl}"`);
+
+            if (updatedPluginContent === pluginContent) {
+                return match;
+            }
+
+            return `plugin_content='${updatedPluginContent}'`;
+        },
+    );
+
+    if (updated === content) {
+        console.warn("Mac install script plugin_content was not updated.");
+        return;
+    }
+
+    fs.writeFileSync(macInstallScript, updated);
+    console.log(`Updated Mac install script URL: ${path.relative(repoRoot, macInstallScript)}`);
 }
 
 const positions = positionalArgs();
@@ -197,5 +250,10 @@ child.on("exit", code => {
     if (closeInputTimer) {
         clearTimeout(closeInputTimer);
     }
+
+    if (code === 0) {
+        updateMacInstallScript(publishBaseUrl);
+    }
+
     process.exitCode = code ?? 1;
 });

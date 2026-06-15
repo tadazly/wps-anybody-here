@@ -37,15 +37,16 @@ $env:PORT=18081; npm run start
 - `GET /dashboard`：Dashboard 页面。
 - `GET /api/state`：Dashboard 使用的 JSON 状态。
 - `GET /health`：健康检查。
-- `GET /install`：WPS 加载项安装页，读取 `wps-addon-publish/publish.html`。
+- `GET /install/mac-install.sh`：Mac 手动安装脚本下载。
 - `GET /addin/*`：发布后的 add-in 构建静态资源。
 
 服务会从这些目录读取 add-in 静态资源：
 
-- `packages/addin/wps-addon-publish/`：仅用于 `/install` 安装页。
+- `packages/addin/wps-addon-publish/`：用于 `/addin/publish.html` 安装页。
+- `scripts/mac-install.sh`：仅用于 Mac 手动安装下载。
 - `packages/addin/wps-addon-build/`：用于 `/addin/*` 构建资源。
 
-如果资源不存在，`/install` 和 `/addin/*` 会返回提示：先执行 `npm run publish:addin`。
+如果资源不存在，`/addin/*` 会返回提示：先执行 `npm run publish:addin`。
 
 ## Dashboard
 
