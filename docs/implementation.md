@@ -94,7 +94,8 @@ HTTP：
 - `/` 和 `/dashboard` 返回 Dashboard。
 - `/api/state` 返回 Dashboard JSON 状态。
 - `/health` 返回健康检查。
-- `/addin/` 和 `/addin/*` 托管 WPS 加载项发布资源。
+- `/install` 托管 WPS 加载项安装页。
+- `/addin/` 和 `/addin/*` 托管 WPS 加载项构建资源。
 
 WebSocket：
 
@@ -177,8 +178,8 @@ npm run start
 
 ```txt
 http://127.0.0.1:18080/
+http://127.0.0.1:18080/install
 http://127.0.0.1:18080/addin/
-http://127.0.0.1:18080/addin/publish.html
 ws://127.0.0.1:18080
 ```
 

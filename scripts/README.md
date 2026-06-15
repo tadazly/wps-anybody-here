@@ -13,7 +13,7 @@
 
 随后填入：
 
-- 服务器地址：`http://127.0.0.1:<port>/addin/`
+- 服务器地址：通过参数或环境变量传入的发布地址，默认本机测试为 `http://127.0.0.1:<port>/addin/`
 - 发布类型：在线模式
 - publish 页面多用户使用：是
 
@@ -23,10 +23,17 @@
 npm run publish:addin
 ```
 
+给其他电脑使用时，传入其他电脑也能访问的 HTTP 地址。没有写路径时脚本会自动补成 `/addin/`：
+
+```bash
+npm run publish:addin -- --url http://splan.61.com
+npm run publish:addin -- --url http://192.168.1.20:18080
+```
+
 自定义端口：
 
 ```bash
-npm run publish:addin -- 18081
+npm run publish:addin -- --url http://192.168.1.20:18081
 ```
 
-或先设置 `PORT`。发布端口必须和协作服务启动端口一致。
+也可以使用 `ADDIN_PUBLISH_URL` 或 `PORT` 环境变量。发布地址必须和协作服务启动地址一致。

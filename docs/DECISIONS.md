@@ -255,7 +255,7 @@ Dashboard 显示：
 
 - 公开仓库地址使用 `https://github.com/tadazly/wps-anybody-here`。
 - Dashboard 右上角提供 GitHub 跳转按钮。
-- Dashboard 右上角提供 `安装插件` 按钮，跳转同源 `/addin/publish.html`。
+- Dashboard 右上角提供 `安装插件` 按钮，跳转同源 `/install`。
 
 原因：
 

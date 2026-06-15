@@ -6,10 +6,9 @@ const repoRoot = path.resolve(__dirname, "..");
 const addinDir = path.join(repoRoot, "packages", "addin");
 const addinBuildDir = path.join(addinDir, "wps-addon-build");
 const addinPublishDir = path.join(addinDir, "wps-addon-publish");
+const args = process.argv.slice(2);
 
-function argValue(name, alias) {
-    const args = process.argv.slice(2);
-
+function namedArgValue(name, alias) {
     for (let index = 0; index < args.length; index += 1) {
         const arg = args[index];
         if (arg === name || arg === alias) {
@@ -21,7 +20,25 @@ function argValue(name, alias) {
         }
     }
 
-    return args.find(arg => !arg.startsWith("-"));
+    return undefined;
+}
+
+function positionalArgs() {
+    const values = [];
+
+    for (let index = 0; index < args.length; index += 1) {
+        const arg = args[index];
+        if (arg.startsWith("-")) {
+            if (!arg.includes("=")) {
+                index += 1;
+            }
+            continue;
+        }
+
+        values.push(arg);
+    }
+
+    return values;
 }
 
 function normalizePort(value) {
@@ -34,6 +51,34 @@ function normalizePort(value) {
     return port;
 }
 
+function looksLikePublishUrl(value) {
+    return /^https?:\/\//i.test(value) || value.includes(".") || value.includes(":");
+}
+
+function normalizePublishBaseUrl(value) {
+    const rawUrl = String(value || "").trim();
+    if (!rawUrl) {
+        console.error("Publish URL cannot be empty.");
+        process.exit(1);
+    }
+
+    const withProtocol = /^https?:\/\//i.test(rawUrl) ? rawUrl : `http://${rawUrl}`;
+
+    try {
+        const url = new URL(withProtocol);
+        if (url.pathname === "" || url.pathname === "/") {
+            url.pathname = "/addin/";
+        } else if (!url.pathname.endsWith("/")) {
+            url.pathname = `${url.pathname}/`;
+        }
+
+        return url.toString();
+    } catch {
+        console.error(`Invalid publish URL: ${value}`);
+        process.exit(1);
+    }
+}
+
 function removePreviousPublishOutput() {
     for (const dir of [addinBuildDir, addinPublishDir]) {
         if (fs.existsSync(dir)) {
@@ -43,9 +88,13 @@ function removePreviousPublishOutput() {
     }
 }
 
-const port = normalizePort(argValue("--port", "-p") || process.env.PORT);
-const publishBaseUrl = process.env.ADDIN_PUBLISH_URL || `http://127.0.0.1:${port}/addin/`;
+const positions = positionalArgs();
+const explicitPublishUrl = namedArgValue("--publish-url", "-u") || namedArgValue("--url") || process.env.ADDIN_PUBLISH_URL;
+const positionalPublishUrl = positions.find(looksLikePublishUrl);
+const port = normalizePort(namedArgValue("--port", "-p") || process.env.PORT || positions.find(value => /^\d+$/.test(value)));
+const publishBaseUrl = normalizePublishBaseUrl(explicitPublishUrl || positionalPublishUrl || `http://127.0.0.1:${port}/addin/`);
 
+console.log(`Using add-in publish URL: ${publishBaseUrl}`);
 removePreviousPublishOutput();
 
 const child = spawn("wpsjs", ["publish"], {

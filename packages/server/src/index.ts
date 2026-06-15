@@ -59,6 +59,28 @@ function sendFile(res: http.ServerResponse, filePath: string) {
     stream.pipe(res);
 }
 
+function tryServeInstallPage(pathname: string, res: http.ServerResponse) {
+    if (pathname !== "/install" && pathname !== "/install/" && pathname !== "/install/publish.html") {
+        return false;
+    }
+
+    const filePath = path.join(addinPublishDir, "publish.html");
+
+    try {
+        const stat = fs.statSync(filePath);
+        if (stat.isFile()) {
+            sendFile(res, filePath);
+            return true;
+        }
+    } catch {
+        // Fall through to the install-specific 404 below.
+    }
+
+    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Add-in install page not found. Run npm run publish:addin first.");
+    return true;
+}
+
 function tryServeAddinStatic(pathname: string, res: http.ServerResponse) {
     if (pathname === "/addin") {
         res.writeHead(302, { location: "/addin/" });
@@ -70,38 +92,23 @@ function tryServeAddinStatic(pathname: string, res: http.ServerResponse) {
         return false;
     }
 
-    const relativePath = pathname.slice("/addin/".length) || "publish.html";
-    const candidates = [
-        { root: addinPublishDir, filePath: path.join(addinPublishDir, relativePath) },
-        { root: addinBuildDir, filePath: path.join(addinBuildDir, relativePath) },
-    ];
+    const relativePath = pathname.slice("/addin/".length) || "index.html";
+    const filePath = path.join(addinBuildDir, relativePath);
 
-    if (relativePath.startsWith("wps-addon-publish/")) {
-        candidates.push({ root: addinPublishDir, filePath: path.join(addinPackageDir, relativePath) });
-    }
-
-    if (relativePath.startsWith("wps-addon-build/")) {
-        candidates.push({ root: addinBuildDir, filePath: path.join(addinPackageDir, relativePath) });
-    }
-
-    for (const candidate of candidates) {
-        if (!isPathInside(candidate.root, candidate.filePath)) {
-            continue;
-        }
-
+    if (isPathInside(addinBuildDir, filePath)) {
         try {
-            const stat = fs.statSync(candidate.filePath);
+            const stat = fs.statSync(filePath);
             if (stat.isFile()) {
-                sendFile(res, candidate.filePath);
+                sendFile(res, filePath);
                 return true;
             }
         } catch {
-            // Try the next publish output location.
+            // Fall through to the add-in build 404 below.
         }
     }
 
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-    res.end("Add-in publish asset not found. Run npm run publish:addin first.");
+    res.end("Add-in build asset not found. Run npm run publish:addin first.");
     return true;
 }
 
@@ -143,7 +150,7 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    if (tryServeAddinStatic(url, res)) {
+    if (tryServeInstallPage(url, res) || tryServeAddinStatic(url, res)) {
         return;
     }
 
@@ -174,6 +181,7 @@ setInterval(() => {
 server.listen(port, () => {
     console.log(`wps-anybody-here server listening on ws://127.0.0.1:${port}`);
     console.log(`dashboard: http://127.0.0.1:${port}/`);
-    console.log(`add-in publish page: http://127.0.0.1:${port}/addin/`);
+    console.log(`add-in install page: http://127.0.0.1:${port}/install`);
+    console.log(`add-in assets: http://127.0.0.1:${port}/addin/`);
     console.log(`health check: http://127.0.0.1:${port}/health`);
 });

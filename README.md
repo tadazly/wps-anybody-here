@@ -19,7 +19,7 @@
 - 服务断开后显示发布机下线状态，并按 10 秒倒计时自动重连。
 - 服务端 Dashboard 显示唯一在线用户数、打开表格、每张表的用户、编辑贡献度和冲突数量。
 - Dashboard 右上角提供 GitHub 跳转和“安装插件”入口，底部显示版权和刷新时间。
-- 服务端托管 WPS 插件发布页和静态资源，默认路径是 `/addin/` 和 `/addin/publish.html`。
+- 服务端托管 WPS 插件安装页和静态资源，默认路径是 `/install` 和 `/addin/`。
 
 ## 目录
 
@@ -45,23 +45,30 @@ npm run start
 
 ```txt
 Dashboard: http://127.0.0.1:18080/
-插件发布页: http://127.0.0.1:18080/addin/
-插件安装页: http://127.0.0.1:18080/addin/publish.html
+插件安装页: http://127.0.0.1:18080/install
+插件静态资源: http://127.0.0.1:18080/addin/
 WebSocket: ws://127.0.0.1:18080
 健康检查: http://127.0.0.1:18080/health
+```
+
+给其他电脑使用时，发布插件要传入其他电脑也能访问的 HTTP 地址。没有写路径时脚本会自动补成 `/addin/`：
+
+```bash
+npm run publish:addin -- --url http://splan.61.com
+npm run publish:addin -- --url http://192.168.1.20:18080
 ```
 
 如果发布机使用其他端口，发布插件和启动服务要使用同一个端口：
 
 ```bash
-npm run publish:addin -- 18081
+npm run publish:addin -- --url http://192.168.1.20:18081
 PORT=18081 npm run start
 ```
 
 PowerShell：
 
 ```powershell
-npm run publish:addin -- 18081
+npm run publish:addin -- --url http://192.168.1.20:18081
 $env:PORT=18081; npm run start
 ```
 

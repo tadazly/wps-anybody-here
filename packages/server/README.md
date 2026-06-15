@@ -37,16 +37,15 @@ $env:PORT=18081; npm run start
 - `GET /dashboard`：Dashboard 页面。
 - `GET /api/state`：Dashboard 使用的 JSON 状态。
 - `GET /health`：健康检查。
-- `GET /addin/`：WPS 加载项发布页，默认落到 `publish.html`。
-- `GET /addin/publish.html`：WPS 加载项安装页。
-- `GET /addin/*`：发布后的 add-in 静态资源。
+- `GET /install`：WPS 加载项安装页，读取 `wps-addon-publish/publish.html`。
+- `GET /addin/*`：发布后的 add-in 构建静态资源。
 
-服务会优先从这些目录读取 add-in 静态资源：
+服务会从这些目录读取 add-in 静态资源：
 
-- `packages/addin/wps-addon-publish/`
-- `packages/addin/wps-addon-build/`
+- `packages/addin/wps-addon-publish/`：仅用于 `/install` 安装页。
+- `packages/addin/wps-addon-build/`：用于 `/addin/*` 构建资源。
 
-如果资源不存在，`/addin/*` 会返回提示：先执行 `npm run publish:addin`。
+如果资源不存在，`/install` 和 `/addin/*` 会返回提示：先执行 `npm run publish:addin`。
 
 ## Dashboard
 

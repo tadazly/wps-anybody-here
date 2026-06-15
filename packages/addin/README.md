@@ -90,27 +90,28 @@ npm run publish:addin
 
 随后自动执行 `wpsjs publish`，并选择：
 
-- 服务器地址：`http://127.0.0.1:18080/addin/`
+- 服务器地址：通过参数或环境变量传入的发布地址，默认本机测试为 `http://127.0.0.1:18080/addin/`
 - 发布类型：`在线模式`
 - publish 页面多用户使用：`是`
 
-如果服务端使用其他端口，把端口作为参数传入：
+给其他电脑使用时，传入其他电脑也能访问的 HTTP 地址。没有写路径时脚本会自动补成 `/addin/`：
 
 ```bash
-npm run publish:addin -- 18081
+npm run publish:addin -- --url http://splan.61.com
+npm run publish:addin -- --url http://192.168.1.20:18080
 ```
 
 PowerShell 也可以用环境变量：
 
 ```powershell
-$env:PORT=18081; npm run publish:addin
+$env:ADDIN_PUBLISH_URL="http://192.168.1.20:18080"; npm run publish:addin
 ```
 
 发布产物由协作服务托管在：
 
 ```txt
-http://127.0.0.1:18080/addin/
-http://127.0.0.1:18080/addin/publish.html
+插件安装页: http://127.0.0.1:18080/install
+插件静态资源: http://127.0.0.1:18080/addin/
 ```
 
 ## 注意
