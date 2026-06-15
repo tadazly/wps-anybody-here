@@ -26,6 +26,29 @@ function makeEditKey(sheetName: string, address: string, rowId?: string, fieldNa
     return makeCellKey(sheetName, address);
 }
 
+const CHANGE_VALUE_LIMIT = 1000;
+const MAX_CLIENT_MESSAGE_BYTES = 128 * 1024;
+
+function getRawDataByteLength(raw: RawData) {
+    if (Array.isArray(raw)) {
+        return raw.reduce((sum, item) => sum + item.byteLength, 0);
+    }
+
+    return raw.byteLength;
+}
+
+function rawDataToString(raw: RawData) {
+    if (Array.isArray(raw)) {
+        return Buffer.concat(raw).toString();
+    }
+
+    if (raw instanceof ArrayBuffer) {
+        return Buffer.from(new Uint8Array(raw)).toString();
+    }
+
+    return Buffer.from(raw).toString();
+}
+
 interface DashboardUser {
     userId: string;
     userName: string;
@@ -122,8 +145,13 @@ export class RoomManager {
     handleMessage(ws: WebSocket, raw: RawData) {
         let msg: ClientMsg;
 
+        if (getRawDataByteLength(raw) > MAX_CLIENT_MESSAGE_BYTES) {
+            this.send(ws, { type: "error", message: "Message is too large" });
+            return;
+        }
+
         try {
-            msg = JSON.parse(raw.toString()) as ClientMsg;
+            msg = JSON.parse(rawDataToString(raw)) as ClientMsg;
         } catch {
             this.send(ws, { type: "error", message: "Invalid JSON" });
             return;
@@ -447,8 +475,8 @@ export class RoomManager {
             address,
             ...(rowId ? { rowId } : {}),
             ...(fieldName ? { fieldName } : {}),
-            oldValue: msg.oldValue,
-            newValue: msg.newValue,
+            oldValue: this.normalizeChangeValue(msg.oldValue),
+            newValue: this.normalizeChangeValue(msg.newValue),
             updatedAt: now,
         };
 
@@ -654,6 +682,38 @@ export class RoomManager {
 
     private normalizeText(value: unknown) {
         return typeof value === "string" ? value.trim() : "";
+    }
+
+    private normalizeChangeValue(value: unknown): unknown {
+        if (value === undefined || value === null || typeof value === "boolean") {
+            return value;
+        }
+
+        if (typeof value === "number") {
+            return Number.isFinite(value) ? value : String(value);
+        }
+
+        if (typeof value === "string") {
+            return this.limitChangeValueText(value);
+        }
+
+        try {
+            return this.limitChangeValueText(JSON.stringify(value));
+        } catch {
+            return this.limitChangeValueText(String(value));
+        }
+    }
+
+    private limitChangeValueText(value: string) {
+        const text = String(value)
+            .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ")
+            .trim();
+
+        if (text.length <= CHANGE_VALUE_LIMIT) {
+            return text;
+        }
+
+        return `${text.slice(0, CHANGE_VALUE_LIMIT)}...(已截断)`;
     }
 
     private normalizeColor(value: unknown) {

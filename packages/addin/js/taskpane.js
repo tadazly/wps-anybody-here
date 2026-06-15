@@ -36,6 +36,8 @@
     const AUTO_JOIN_DELAY_MS = 500;
     const AUTO_JOIN_RETRY_MS = 2000;
     const REPO_PUSH_NOTIFICATION_LIMIT = 8;
+    const REMOTE_CHANGE_LIMIT = 20;
+    const DISPLAY_VALUE_LIMIT = 160;
     const REPO_PUSH_TITLE_LIMIT = 42;
     const REPO_PUSH_MESSAGE_LIMIT = 96;
     const CONFLICT_COLOR = "#ff4d4f";
@@ -81,6 +83,7 @@
     let pendingColorMode = "auto";
     let pendingCustomColor = "";
     let currentUsers = [];
+    let remoteChanges = [];
     let conflicts = [];
     let highlightRefreshing = false;
     let highlightRefreshQueued = false;
@@ -685,10 +688,12 @@
         workbookFullName = "";
         activeWorkbookIgnored = false;
         remoteSelections.clear();
+        remoteChanges = [];
         conflicts = [];
         currentUsers = [];
         renderUsers([]);
         renderSelections();
+        renderRemoteChanges();
         renderConflicts();
         renderRepoPushNotifications();
         cleanupWorkbookHighlights();
@@ -713,10 +718,12 @@
         workbookFullName = "";
         activeWorkbookIgnored = false;
         remoteSelections.clear();
+        remoteChanges = [];
         conflicts = [];
         currentUsers = [];
         renderUsers([]);
         renderSelections();
+        renderRemoteChanges();
         renderConflicts();
         renderRepoPushNotifications();
         cleanupWorkbookHighlights();
@@ -780,6 +787,7 @@
             workbookFullName: info.fullName,
             users: [],
             selections: new Map(),
+            remoteChanges: [],
             conflicts: [],
             repoPushNotifications: [],
             reconnectTimer: null,
@@ -816,6 +824,7 @@
         workbookFullName = info.fullName;
         activeWorkbookIgnored = true;
         remoteSelections.clear();
+        remoteChanges = [];
         conflicts = [];
         currentUsers = [];
 
@@ -935,6 +944,7 @@
         connection.socket = null;
         connection.users = [];
         connection.selections.clear();
+        connection.remoteChanges = [];
         connection.conflicts = [];
 
         if (connection.roomId === roomId) {
@@ -1073,6 +1083,9 @@
             connection.users = connection.users.map(item => item.userId === user.userId
                 ? { ...item, userName: user.userName, color: user.color }
                 : item);
+            connection.remoteChanges = (connection.remoteChanges || []).map(item => item.userId === user.userId
+                ? { ...item, userName: user.userName, color: user.color }
+                : item);
             connection.conflicts = connection.conflicts.map(conflict => ({
                 ...conflict,
                 users: conflict.users.map(item => item.userId === user.userId
@@ -1202,6 +1215,7 @@
         }
 
         if (msg.type === "cellChange") {
+            addRemoteChange(connection, msg.change);
             return;
         }
 
@@ -1230,7 +1244,46 @@
         renderUsers(currentUsers);
         renderRepoPushNotifications();
         renderSelections();
+        remoteChanges = connection ? connection.remoteChanges : [];
+        renderRemoteChanges();
         renderConflicts();
+    }
+
+    function addRemoteChange(connection, change) {
+        if (!connection || !change || !change.rowId) {
+            return;
+        }
+
+        connection.remoteChanges = [
+            {
+                id: `${change.userId}:${change.sheetName}:${change.rowId}:${change.fieldName || ""}:${change.updatedAt || Date.now()}`,
+                ...change,
+            },
+            ...(connection.remoteChanges || []),
+        ].slice(0, REMOTE_CHANGE_LIMIT);
+
+        if (connection.roomId === roomId) {
+            remoteChanges = connection.remoteChanges;
+            renderRemoteChanges();
+        }
+    }
+
+    function clearDepartedRemoteChanges() {
+        const connection = getActiveConnection();
+        if (!connection) {
+            return;
+        }
+
+        const onlineUserIds = new Set((connection.users || []).map(user => user.userId));
+        const beforeCount = (connection.remoteChanges || []).length;
+        connection.remoteChanges = (connection.remoteChanges || []).filter(change => onlineUserIds.has(change.userId));
+        remoteChanges = connection.remoteChanges;
+        renderRemoteChanges();
+
+        const removedCount = beforeCount - connection.remoteChanges.length;
+        if (removedCount > 0) {
+            log(`已清理 ${removedCount} 条离线用户远端修改记录`);
+        }
     }
 
     function updateServerStatus() {
@@ -1535,6 +1588,52 @@
         renderMiniMap();
     }
 
+    function renderRemoteChanges() {
+        const container = $("remoteChangeList");
+        const count = $("remoteChangeCount");
+        const clearBtn = $("clearDepartedRemoteChangesBtn");
+        if (!container || !count || !clearBtn) {
+            return;
+        }
+
+        const changes = (remoteChanges || []).filter(change => change && change.rowId);
+        const onlineUserIds = new Set(currentUsers.map(user => user.userId));
+        const departedCount = changes.filter(change => !onlineUserIds.has(change.userId)).length;
+        count.textContent = String(changes.length);
+        clearBtn.style.display = departedCount ? "inline-flex" : "none";
+        container.innerHTML = "";
+        container.className = changes.length ? "" : "empty";
+
+        if (!changes.length) {
+            container.textContent = "暂无远端修改";
+            return;
+        }
+
+        for (const change of changes) {
+            const div = document.createElement("div");
+            div.className = "item";
+
+            const dot = document.createElement("span");
+            dot.className = "user-dot";
+            dot.style.background = change.color || "#94a3b8";
+
+            const text = document.createElement("div");
+            const title = document.createElement("div");
+            title.className = "item-title";
+            title.textContent = `${change.userName || "远端用户"}${onlineUserIds.has(change.userId) ? "" : "（已离线）"}`;
+
+            const sub = document.createElement("div");
+            sub.className = "item-sub";
+            sub.textContent = formatRemoteChange(change);
+
+            text.appendChild(title);
+            text.appendChild(sub);
+            div.appendChild(dot);
+            div.appendChild(text);
+            container.appendChild(div);
+        }
+    }
+
     function renderConflicts() {
         const container = $("conflictList");
         if (!container) {
@@ -1584,6 +1683,14 @@
         renderMiniMap();
     }
 
+    function formatRemoteChange(change) {
+        const fieldName = change.fieldName || parseColumnFromAddress(change.address) || change.address || "";
+        const location = `${change.sheetName} | id: ${change.rowId}${fieldName ? ` | ${fieldName}` : ""}`;
+        const value = `改为：${formatValue(change.newValue)}`;
+        const time = change.updatedAt ? formatTime(change.updatedAt) : "";
+        return [location, value, time].filter(Boolean).join(" | ");
+    }
+
     function formatValue(value) {
         if (value === undefined) {
             return "空";
@@ -1591,14 +1698,32 @@
         if (value === null) {
             return "空";
         }
+
+        let text = "";
         if (typeof value === "object") {
             try {
-                return JSON.stringify(value);
+                text = JSON.stringify(value);
             } catch {
-                return String(value);
+                text = String(value);
             }
+        } else {
+            text = String(value);
         }
-        return String(value);
+
+        return normalizeDisplayValue(text) || "空";
+    }
+
+    function normalizeDisplayValue(value) {
+        const text = String(value || "")
+            .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+
+        if (text.length <= DISPLAY_VALUE_LIMIT) {
+            return text;
+        }
+
+        return `${text.slice(0, DISPLAY_VALUE_LIMIT)}...`;
     }
 
     function formatTime(value) {
@@ -2093,16 +2218,47 @@
         }
     }
 
-    function getRangeValue(range) {
+    function getRangeValue(range, sheet, address) {
+        const directValue = readCellChangeValue(range);
+        if (directValue !== undefined) {
+            return directValue;
+        }
+
         try {
-            return range.Value;
+            const fallbackRange = sheet && address ? sheet.Range(normalizeAddress(address)) : null;
+            return readCellChangeValue(fallbackRange);
         } catch {
+            return undefined;
+        }
+    }
+
+    function readCellChangeValue(range) {
+        if (!range) {
+            return undefined;
+        }
+
+        const properties = ["Value2", "Value", "Text", "Formula"];
+        for (const propertyName of properties) {
             try {
-                return range.Formula;
+                const value = readRangeDisplayProperty(range, propertyName);
+                if (isUsableCellChangeValue(value)) {
+                    return value;
+                }
             } catch {
-                return undefined;
+                // ignore and try the next WPS range property
             }
         }
+
+        return undefined;
+    }
+
+    function isUsableCellChangeValue(value) {
+        if (value === undefined || value === null || typeof value === "function") {
+            return false;
+        }
+
+        const text = String(value);
+        return !/^function\s+\w*\s*\(\)\s*\{\s*\[native code\]\s*\}$/i.test(text.trim());
     }
 
     function bindWpsEvents() {
@@ -2198,7 +2354,7 @@
             sheetName,
             address,
             ...meta,
-            newValue: getRangeValue(range),
+            newValue: getRangeValue(range, sheet, address),
         });
     }
 
@@ -3135,6 +3291,7 @@
             }
         });
         $("clearRepoPushNotificationsBtn").addEventListener("click", clearRepoPushNotifications);
+        $("clearDepartedRemoteChangesBtn").addEventListener("click", clearDepartedRemoteChanges);
 
         const serverUrlInput = $("serverUrlInput");
         const repoUrlInput = $("repoUrlInput");
@@ -3176,6 +3333,7 @@
         renderUsers([]);
         renderRepoPushNotifications();
         renderSelections();
+        renderRemoteChanges();
         renderConflicts();
 
         window.setTimeout(cleanupWorkbookHighlights, 0);

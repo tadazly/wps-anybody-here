@@ -455,6 +455,13 @@
             text-transform: uppercase;
         }
 
+        .section-title-main {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+        }
+
         .count-pill {
             min-width: 22px;
             padding: 1px 7px;
@@ -619,6 +626,17 @@
                 <span id="selectionCount" class="count-pill">0</span>
             </div>
             <div id="selectionList" class="empty">暂无远端选区</div>
+        </section>
+
+        <section class="section">
+            <div class="section-title">
+                <span class="section-title-main">
+                    <span>远端修改</span>
+                    <span id="remoteChangeCount" class="count-pill">0</span>
+                </span>
+                <button id="clearDepartedRemoteChangesBtn" class="ghost-btn" type="button">清理离线</button>
+            </div>
+            <div id="remoteChangeList" class="empty">暂无远端修改</div>
         </section>
 
         <section class="section">
