@@ -35,6 +35,9 @@
     const HIGHLIGHT_MAX_RETRY_MS = 5000;
     const AUTO_JOIN_DELAY_MS = 500;
     const AUTO_JOIN_RETRY_MS = 2000;
+    const REPO_PUSH_NOTIFICATION_LIMIT = 8;
+    const REPO_PUSH_TITLE_LIMIT = 42;
+    const REPO_PUSH_MESSAGE_LIMIT = 96;
     const CONFLICT_COLOR = "#ff4d4f";
     const CONFLICT_FILL_COLOR = "#fde8ea";
     const CONFLICT_BORDER_COLOR = "#ff0000";
@@ -687,6 +690,7 @@
         renderUsers([]);
         renderSelections();
         renderConflicts();
+        renderRepoPushNotifications();
         cleanupWorkbookHighlights();
 
         setServerStatus("offline", "已离开协作房间");
@@ -714,6 +718,7 @@
         renderUsers([]);
         renderSelections();
         renderConflicts();
+        renderRepoPushNotifications();
         cleanupWorkbookHighlights();
         syncOpenWorkbooks();
     }
@@ -776,6 +781,7 @@
             users: [],
             selections: new Map(),
             conflicts: [],
+            repoPushNotifications: [],
             reconnectTimer: null,
             reconnectRemainSeconds: 0,
         };
@@ -1199,6 +1205,11 @@
             return;
         }
 
+        if (msg.type === "repoPush") {
+            addRepoPushNotification(connection, msg.push || {});
+            return;
+        }
+
         if (msg.type === "error") {
             log(`服务端提示：${msg.message}`);
         }
@@ -1217,6 +1228,7 @@
 
         conflicts = connection ? connection.conflicts : [];
         renderUsers(currentUsers);
+        renderRepoPushNotifications();
         renderSelections();
         renderConflicts();
     }
@@ -1319,6 +1331,120 @@
                 toast.remove();
             }, 220);
         }, options.duration || 2600);
+    }
+
+    function addRepoPushNotification(connection, push) {
+        if (!connection || !push) {
+            return;
+        }
+
+        const notification = {
+            id: String(push.id || `${Date.now()}:${Math.random()}`),
+            pusherName: clampSingleLine(push.pusherName || "有人", REPO_PUSH_TITLE_LIMIT),
+            message: clampSingleLine(push.message || "推送了表格仓库更新", REPO_PUSH_MESSAGE_LIMIT),
+            commitId: clampSingleLine(push.commitId || "", 12),
+            commitUrl: String(push.commitUrl || ""),
+            updatedAt: Number(push.updatedAt || Date.now()),
+        };
+
+        connection.repoPushNotifications = [
+            notification,
+            ...(connection.repoPushNotifications || []).filter(item => item.id !== notification.id),
+        ].slice(0, REPO_PUSH_NOTIFICATION_LIMIT);
+
+        if (connection.roomId === roomId) {
+            renderRepoPushNotifications();
+        }
+
+        log(`${notification.pusherName} 推送了表格：${notification.message}`);
+    }
+
+    function dismissRepoPushNotification(id) {
+        const connection = getActiveConnection();
+        if (!connection) {
+            return;
+        }
+
+        connection.repoPushNotifications = (connection.repoPushNotifications || []).filter(item => item.id !== id);
+        renderRepoPushNotifications();
+    }
+
+    function clearRepoPushNotifications() {
+        const connection = getActiveConnection();
+        if (!connection) {
+            return;
+        }
+
+        connection.repoPushNotifications = [];
+        renderRepoPushNotifications();
+    }
+
+    function renderRepoPushNotifications() {
+        const wrap = $("repoPushNotifications");
+        const list = $("repoPushNotificationList");
+        const count = $("repoPushNotificationCount");
+        const clearBtn = $("clearRepoPushNotificationsBtn");
+        if (!wrap || !list || !count || !clearBtn) {
+            return;
+        }
+
+        const connection = getActiveConnection();
+        const notifications = connection ? connection.repoPushNotifications || [] : [];
+        wrap.style.display = notifications.length ? "block" : "none";
+        count.textContent = String(notifications.length);
+        clearBtn.style.display = notifications.length > 1 ? "inline-flex" : "none";
+        list.innerHTML = "";
+
+        for (const notification of notifications) {
+            const item = document.createElement("div");
+            item.className = "repo-push-notification";
+
+            const text = document.createElement("div");
+            text.className = "repo-push-text";
+
+            const title = document.createElement("div");
+            title.className = "repo-push-title";
+            title.textContent = `${notification.pusherName} 推送了表格`;
+
+            const sub = document.createElement("div");
+            sub.className = "repo-push-sub";
+            sub.textContent = notification.commitId
+                ? `${notification.message} (${notification.commitId})`
+                : notification.message;
+            if (notification.commitUrl) {
+                sub.title = notification.commitUrl;
+            }
+
+            const time = document.createElement("div");
+            time.className = "repo-push-time";
+            time.textContent = formatTime(notification.updatedAt);
+
+            const closeBtn = document.createElement("button");
+            closeBtn.className = "repo-push-close";
+            closeBtn.type = "button";
+            closeBtn.textContent = "×";
+            closeBtn.title = "关闭通知";
+            closeBtn.setAttribute("aria-label", "关闭通知");
+            closeBtn.onclick = function () {
+                dismissRepoPushNotification(notification.id);
+            };
+
+            text.appendChild(title);
+            text.appendChild(sub);
+            text.appendChild(time);
+            item.appendChild(text);
+            item.appendChild(closeBtn);
+            list.appendChild(item);
+        }
+    }
+
+    function clampSingleLine(value, maxLength) {
+        const text = String(value || "").replace(/\s+/g, " ").trim();
+        if (text.length <= maxLength) {
+            return text;
+        }
+
+        return `${text.slice(0, Math.max(0, maxLength - 1))}…`;
     }
 
     function renderUsers(users) {
@@ -3008,6 +3134,7 @@
                 autoJoinRoom();
             }
         });
+        $("clearRepoPushNotificationsBtn").addEventListener("click", clearRepoPushNotifications);
 
         const serverUrlInput = $("serverUrlInput");
         const repoUrlInput = $("repoUrlInput");
@@ -3047,6 +3174,7 @@
 
         setServerStatus("connecting", settingsSaved ? "正在自动加入协作..." : "请先完成协作设置");
         renderUsers([]);
+        renderRepoPushNotifications();
         renderSelections();
         renderConflicts();
 

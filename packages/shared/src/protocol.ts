@@ -58,6 +58,7 @@ export type ServerMsg =
     | SelectionRemovedServerMsg
     | CellChangeServerMsg
     | ConflictsServerMsg
+    | RepoPushServerMsg
     | ErrorServerMsg;
 
 export interface JoinedServerMsg {
@@ -101,6 +102,11 @@ export interface CellChangeServerMsg {
 export interface ConflictsServerMsg {
     type: "conflicts";
     conflicts: ConflictInfo[];
+}
+
+export interface RepoPushServerMsg {
+    type: "repoPush";
+    push: RepoPushInfo;
 }
 
 export interface ErrorServerMsg {
@@ -152,6 +158,17 @@ export interface ConflictInfo {
         color: string;
         newValue: unknown;
     }>;
+}
+
+export interface RepoPushInfo {
+    id: string;
+    repoUrl: string;
+    workbookPath: string;
+    pusherName: string;
+    message: string;
+    commitId?: string;
+    commitUrl?: string;
+    updatedAt: number;
 }
 
 export function makeCellKey(sheetName: string, address: string) {

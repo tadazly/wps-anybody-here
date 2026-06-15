@@ -5,6 +5,7 @@ import {
     type ClientMsg,
     type ConflictInfo,
     type JoinMsg,
+    type RepoPushInfo,
     type SelectionInfo,
     type SelectionMsg,
     type ServerMsg,
@@ -234,6 +235,27 @@ export class RoomManager {
                 // ignore
             }
         }
+    }
+
+    broadcastRepoPush(push: RepoPushInfo) {
+        const repoUrl = this.normalizeRepoUrl(push.repoUrl);
+        const workbookPath = this.normalizePath(push.workbookPath);
+
+        if (!repoUrl || !workbookPath) {
+            return 0;
+        }
+
+        const targetRoomId = `${repoUrl}::${workbookPath}`.toLowerCase();
+        const room = this.rooms.get(targetRoomId);
+        if (!room) {
+            return 0;
+        }
+
+        this.broadcast(room, {
+            type: "repoPush",
+            push,
+        });
+        return room.clients.size;
     }
 
     private handleJoin(ws: WebSocket, msg: JoinMsg) {
@@ -637,6 +659,14 @@ export class RoomManager {
     private normalizeColor(value: unknown) {
         const color = this.normalizeText(value);
         return /^#[0-9a-f]{6}$/i.test(color) ? color : "";
+    }
+
+    private normalizeRepoUrl(value: unknown) {
+        return this.normalizeText(value).replace(/\/+$/, "");
+    }
+
+    private normalizePath(value: unknown) {
+        return this.normalizeText(value).replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+/, "");
     }
 
     private isCellAddress(value: string) {

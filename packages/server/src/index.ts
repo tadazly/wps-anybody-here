@@ -2,10 +2,12 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { WebSocketServer } from "ws";
+import type { RepoPushInfo } from "@wps-anybody-here/shared";
 import { renderDashboardHtml } from "./dashboard";
 import { RoomManager } from "./room-manager";
 
 const HEARTBEAT_TIMEOUT_MS = Number(process.env.HEARTBEAT_TIMEOUT_MS || 30_000);
+const WEBHOOK_BODY_LIMIT_BYTES = Number(process.env.WEBHOOK_BODY_LIMIT_BYTES || 1024 * 1024);
 const port = Number(process.env.PORT || 18080);
 const addinPackageDir = process.env.ADDIN_PACKAGE_DIR || path.resolve(__dirname, "../../addin");
 const addinPublishDir = path.join(addinPackageDir, "wps-addon-publish");
@@ -35,13 +37,231 @@ function isPathInside(root: string, target: string) {
     return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function requestPath(req: http.IncomingMessage) {
+function requestUrl(req: http.IncomingMessage) {
     try {
-        const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
-        return decodeURIComponent(url.pathname);
+        return new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     } catch {
-        return "/";
+        return new URL("/", "http://localhost");
     }
+}
+
+function readJsonBody(req: http.IncomingMessage) {
+    return new Promise<unknown>((resolve, reject) => {
+        let body = "";
+
+        req.setEncoding("utf8");
+        req.on("data", chunk => {
+            body += chunk;
+            if (Buffer.byteLength(body, "utf8") > WEBHOOK_BODY_LIMIT_BYTES) {
+                reject(new Error("Request body is too large"));
+                req.destroy();
+            }
+        });
+        req.on("end", () => {
+            if (!body.trim()) {
+                resolve({});
+                return;
+            }
+
+            try {
+                resolve(JSON.parse(body));
+            } catch {
+                reject(new Error("Invalid JSON"));
+            }
+        });
+        req.on("error", reject);
+    });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function asText(value: unknown) {
+    return typeof value === "string" ? value.trim() : "";
+}
+
+function asRecord(value: unknown) {
+    return isRecord(value) ? value : {};
+}
+
+function asRecordList(value: unknown) {
+    return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function normalizeRepoUrl(value: unknown) {
+    return asText(value).replace(/\/+$/, "");
+}
+
+function normalizeWorkbookPath(value: unknown) {
+    return asText(value).replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+/, "");
+}
+
+function collectRepoUrls(payload: Record<string, unknown>, queryRepoUrl: string) {
+    const urls = new Set<string>();
+    const repository = asRecord(payload.repository);
+    const project = asRecord(payload.project);
+
+    [
+        queryRepoUrl,
+        payload.repoUrl,
+        payload.repositoryUrl,
+        repository.html_url,
+        repository.web_url,
+        repository.clone_url,
+        repository.git_http_url,
+        repository.url,
+        project.web_url,
+        project.git_http_url,
+        project.http_url_to_repo,
+    ].forEach(value => {
+        const url = normalizeRepoUrl(value);
+        if (url) {
+            urls.add(url);
+            if (url.endsWith(".git")) {
+                urls.add(url.slice(0, -4));
+            }
+        }
+    });
+
+    return Array.from(urls);
+}
+
+function collectChangedPaths(payload: Record<string, unknown>) {
+    const paths = new Set<string>();
+
+    function addPath(value: unknown) {
+        const normalized = normalizeWorkbookPath(value);
+        if (normalized) {
+            paths.add(normalized);
+        }
+    }
+
+    function addPathList(value: unknown) {
+        if (Array.isArray(value)) {
+            value.forEach(addPath);
+        } else {
+            addPath(value);
+        }
+    }
+
+    addPath(payload.workbookPath);
+    addPath(payload.path);
+    addPathList(payload.paths);
+
+    for (const commit of asRecordList(payload.commits)) {
+        addPathList(commit.added);
+        addPathList(commit.modified);
+        addPathList(commit.removed);
+    }
+
+    const headCommit = asRecord(payload.head_commit);
+    addPathList(headCommit.added);
+    addPathList(headCommit.modified);
+    addPathList(headCommit.removed);
+
+    return Array.from(paths);
+}
+
+function lastCommit(payload: Record<string, unknown>) {
+    const headCommit = asRecord(payload.head_commit);
+    if (Object.keys(headCommit).length) {
+        return headCommit;
+    }
+
+    const commits = asRecordList(payload.commits);
+    return commits[commits.length - 1] || {};
+}
+
+function limitText(value: unknown, maxLength: number) {
+    const text = asText(value).replace(/\s+/g, " ");
+    if (text.length <= maxLength) {
+        return text;
+    }
+
+    return `${text.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function makeRepoPushes(payload: Record<string, unknown>, queryRepoUrl: string) {
+    const repoUrls = collectRepoUrls(payload, queryRepoUrl);
+    const paths = collectChangedPaths(payload);
+    const commit = lastCommit(payload);
+    const pusher = asRecord(payload.pusher);
+    const sender = asRecord(payload.sender);
+    const user = asRecord(payload.user);
+    const pusherName = limitText(
+        payload.pusherName ||
+            payload.user_name ||
+            pusher.name ||
+            pusher.username ||
+            sender.login ||
+            sender.name ||
+            user.name,
+        40,
+    ) || "有人";
+    const message = limitText(payload.message || commit.message || "推送了表格仓库更新", 160);
+    const commitId = limitText(payload.commitId || commit.id || payload.after || payload.checkout_sha, 40);
+    const commitUrl = limitText(payload.commitUrl || commit.url, 240);
+    const updatedAt = Date.now();
+    const pushes: RepoPushInfo[] = [];
+
+    for (const repoUrl of repoUrls) {
+        for (const workbookPath of paths) {
+            pushes.push({
+                id: `${updatedAt}:${repoUrl}:${workbookPath}:${commitId || message}`,
+                repoUrl,
+                workbookPath,
+                pusherName,
+                message,
+                ...(commitId ? { commitId } : {}),
+                ...(commitUrl ? { commitUrl } : {}),
+                updatedAt,
+            });
+        }
+    }
+
+    return pushes;
+}
+
+async function handleRepoWebhook(req: http.IncomingMessage, res: http.ServerResponse, queryRepoUrl: string) {
+    if (req.method !== "POST") {
+        res.writeHead(405, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false, error: "POST required" }));
+        return;
+    }
+
+    let payload: unknown;
+    try {
+        payload = await readJsonBody(req);
+    } catch (err) {
+        res.writeHead(400, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : "Invalid request body" }));
+        return;
+    }
+
+    if (!isRecord(payload)) {
+        res.writeHead(400, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false, error: "JSON object required" }));
+        return;
+    }
+
+    const pushes = makeRepoPushes(payload, queryRepoUrl);
+    if (!pushes.length) {
+        res.writeHead(400, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false, error: "repoUrl and changed workbook path are required" }));
+        return;
+    }
+
+    let delivered = 0;
+    for (const push of pushes) {
+        delivered += roomManager.broadcastRepoPush(push);
+    }
+
+    res.writeHead(202, {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+    });
+    res.end(JSON.stringify({ ok: true, pushes: pushes.length, delivered }));
 }
 
 function sendFile(res: http.ServerResponse, filePath: string, headers: http.OutgoingHttpHeaders = {}) {
@@ -133,7 +353,7 @@ function tryServeAddinStatic(pathname: string, res: http.ServerResponse) {
 
 const server = http.createServer((req, res) => {
     res.setHeader("access-control-allow-origin", "*");
-    res.setHeader("access-control-allow-methods", "GET, OPTIONS");
+    res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
     res.setHeader("access-control-allow-headers", "content-type");
 
     if (req.method === "OPTIONS") {
@@ -142,7 +362,8 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    const url = requestPath(req);
+    const parsedUrl = requestUrl(req);
+    const url = decodeURIComponent(parsedUrl.pathname);
 
     if (url === "/" || url === "/dashboard") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -166,6 +387,11 @@ const server = http.createServer((req, res) => {
             rooms: roomManager.roomCount,
             clients: roomManager.clientCount,
         }));
+        return;
+    }
+
+    if (url === "/api/webhooks/repo-push" || url === "/webhooks/repo-push") {
+        void handleRepoWebhook(req, res, parsedUrl.searchParams.get("repoUrl") || "");
         return;
     }
 

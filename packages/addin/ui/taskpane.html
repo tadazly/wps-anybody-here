@@ -151,6 +151,88 @@
             white-space: nowrap;
         }
 
+        .repo-push-notifications {
+            display: none;
+            margin: -4px 0 12px;
+        }
+
+        .repo-push-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 7px;
+            color: #334155;
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        .repo-push-head-left {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+        }
+
+        .repo-push-list {
+            display: grid;
+            gap: 7px;
+        }
+
+        .repo-push-notification {
+            display: grid;
+            grid-template-columns: 1fr 26px;
+            gap: 8px;
+            align-items: start;
+            padding: 8px 8px 8px 10px;
+            border: 1px solid #bfdbfe;
+            border-left: 3px solid #2563eb;
+            border-radius: 8px;
+            background: #eff6ff;
+        }
+
+        .repo-push-text {
+            min-width: 0;
+        }
+
+        .repo-push-title {
+            color: #1e3a8a;
+            font-weight: 800;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .repo-push-sub {
+            margin-top: 2px;
+            color: #334155;
+            font-size: 12px;
+            line-height: 1.4;
+            word-break: break-word;
+        }
+
+        .repo-push-time {
+            margin-top: 3px;
+            color: #64748b;
+            font-size: 12px;
+        }
+
+        .repo-push-close {
+            display: inline-flex;
+            width: 26px;
+            height: 26px;
+            align-items: center;
+            justify-content: center;
+            background: rgba(37, 99, 235, 0.1);
+            color: #1d4ed8;
+            font-size: 18px;
+            line-height: 1;
+        }
+
+        .repo-push-close:hover {
+            background: rgba(37, 99, 235, 0.18);
+        }
+
         .header {
             display: flex;
             align-items: center;
@@ -497,6 +579,17 @@
             <span class="server-status-dot"></span>
             <span id="serverStatusText">未加入协作</span>
             <button id="reconnectBtn" class="reconnect-btn" type="button">重连</button>
+        </div>
+
+        <div id="repoPushNotifications" class="repo-push-notifications">
+            <div class="repo-push-head">
+                <span class="repo-push-head-left">
+                    <span>仓库推送</span>
+                    <span id="repoPushNotificationCount" class="count-pill">0</span>
+                </span>
+                <button id="clearRepoPushNotificationsBtn" class="ghost-btn" type="button">全部清除</button>
+            </div>
+            <div id="repoPushNotificationList" class="repo-push-list"></div>
         </div>
 
         <div class="header">
