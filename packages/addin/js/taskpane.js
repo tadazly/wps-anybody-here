@@ -1504,15 +1504,15 @@
         const panelHeight = 260;
 
         for (const selection of selections) {
-            const localAddress = resolveSelectionLocalAddress(selection);
-            if (!localAddress) {
+            const markerAddress = getSelectionMarkerAddress(selection);
+            if (!markerAddress) {
                 continue;
             }
 
             const marker = document.createElement("div");
             marker.className = "marker";
             marker.style.background = selection.color;
-            marker.style.top = `${calcMarkerTop(parseRowFromAddress(localAddress), maxRow, panelHeight)}px`;
+            marker.style.top = `${calcMarkerTop(parseRowFromAddress(markerAddress), maxRow, panelHeight)}px`;
             marker.title = `${selection.userName}: ${formatSelectionLocation(selection)}`;
             marker.onclick = function () {
                 jumpToSelection(selection);
@@ -1521,8 +1521,8 @@
         }
 
         for (const conflict of conflicts) {
-            const localAddress = resolveConflictLocalAddress(conflict);
-            if (!localAddress) {
+            const markerAddress = getConflictMarkerAddress(conflict);
+            if (!markerAddress) {
                 continue;
             }
 
@@ -1530,7 +1530,7 @@
             marker.className = "marker";
             marker.style.background = CONFLICT_COLOR;
             marker.style.height = "6px";
-            marker.style.top = `${calcMarkerTop(parseRowFromAddress(localAddress), maxRow, panelHeight)}px`;
+            marker.style.top = `${calcMarkerTop(parseRowFromAddress(markerAddress), maxRow, panelHeight)}px`;
             marker.title = `冲突: ${formatConflictLocation(conflict)}`;
             marker.onclick = function () {
                 jumpToConflict(conflict);
@@ -1542,18 +1542,34 @@
     function maxMarkerRow(selections, conflictsList) {
         let max = 1;
         for (const selection of selections) {
-            const localAddress = resolveSelectionLocalAddress(selection);
-            if (localAddress) {
-                max = Math.max(max, parseRowFromAddress(localAddress));
+            const markerAddress = getSelectionMarkerAddress(selection);
+            if (markerAddress) {
+                max = Math.max(max, parseRowFromAddress(markerAddress));
             }
         }
         for (const conflict of conflictsList) {
-            const localAddress = resolveConflictLocalAddress(conflict);
-            if (localAddress) {
-                max = Math.max(max, parseRowFromAddress(localAddress));
+            const markerAddress = getConflictMarkerAddress(conflict);
+            if (markerAddress) {
+                max = Math.max(max, parseRowFromAddress(markerAddress));
             }
         }
         return max;
+    }
+
+    function getSelectionMarkerAddress(selection) {
+        if (!selection || !selection.address) {
+            return "";
+        }
+
+        return normalizeAddress(selection.address);
+    }
+
+    function getConflictMarkerAddress(conflict) {
+        if (!conflict || !conflict.address) {
+            return "";
+        }
+
+        return normalizeAddress(conflict.address);
     }
 
     function calcMarkerTop(rowIndex, maxRow, panelHeight) {
@@ -1565,9 +1581,7 @@
 
         try {
             if (selection.rowId) {
-                const existsLocally = Boolean(findGameConfigRowById(selection.sheetName, selection.rowId));
-                const idText = existsLocally ? `id: ${selection.rowId}` : `id: ${selection.rowId}(新增)`;
-                return `${selection.sheetName} | ${idText} | ${selection.fieldName || parseColumnFromAddress(selection.address) || selection.address}`;
+                return `${selection.sheetName} | id: ${selection.rowId} | ${selection.fieldName || parseColumnFromAddress(selection.address) || selection.address}`;
             }
 
             if (!isGameConfigSheet(selection.sheetName)) {
@@ -1598,9 +1612,7 @@
 
     function formatConflictLocation(conflict) {
         if (conflict && conflict.rowId) {
-            const existsLocally = Boolean(findGameConfigRowById(conflict.sheetName, conflict.rowId));
-            const idText = existsLocally ? `id: ${conflict.rowId}` : `id: ${conflict.rowId}(新增)`;
-            return `${conflict.sheetName} | ${idText} | ${conflict.fieldName || parseColumnFromAddress(conflict.address) || conflict.address}`;
+            return `${conflict.sheetName} | id: ${conflict.rowId} | ${conflict.fieldName || parseColumnFromAddress(conflict.address) || conflict.address}`;
         }
 
         return `${conflict.sheetName}!${conflict.address}`;
