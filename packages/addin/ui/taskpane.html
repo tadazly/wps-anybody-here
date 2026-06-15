@@ -591,6 +591,14 @@
                 <div class="settings-note">开启后会在表格中标记远端选取和冲突单元格，WPS 可能一直显示表格被修改；实际保存时插件会先清理协作高亮，只保存你自己做的修改。</div>
             </div>
 
+            <div class="settings-field settings-check-field">
+                <label class="settings-check-label" for="ignoreExternalWorkbooksInput">
+                    <input id="ignoreExternalWorkbooksInput" type="checkbox" checked>
+                    <span>忽略本地根目录外的表</span>
+                </label>
+                <div class="settings-note">开启后，本地仓库根目录外的工作簿不会加入协作，也不会在插件加载时自动打开协作面板。</div>
+            </div>
+
             <div class="settings-actions">
                 <button id="saveSettingsBtn" class="primary-btn" type="button">保存设置</button>
             </div>

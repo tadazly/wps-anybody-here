@@ -86,6 +86,9 @@ function showAnybodyHereTaskPane() {
 function autoShowAnybodyHereTaskPane(attempt) {
     window.setTimeout(function () {
         try {
+            if (!shouldAutoShowAnybodyHereTaskPane()) {
+                return;
+            }
             showAnybodyHereTaskPane();
         } catch (err) {
             if (attempt < 8) {
@@ -93,6 +96,75 @@ function autoShowAnybodyHereTaskPane(attempt) {
             }
         }
     }, attempt === 0 ? 600 : 1200);
+}
+
+function shouldAutoShowAnybodyHereTaskPane() {
+    if (!hasAnybodyHereSavedSettings()) {
+        return true;
+    }
+
+    if (!shouldIgnoreAnybodyHereExternalWorkbooks()) {
+        return true;
+    }
+
+    const root = getAnybodyHereRepoRoot();
+    const fullName = getActiveWorkbookFullName();
+    if (!root || !fullName) {
+        return true;
+    }
+
+    return isPathInAnybodyHereRepoRoot(fullName, root);
+}
+
+function hasAnybodyHereSavedSettings() {
+    return safeLocalStorageGet("wpsAnybodyHere.settingsSaved") === "1";
+}
+
+function shouldIgnoreAnybodyHereExternalWorkbooks() {
+    return safeLocalStorageGet("wpsAnybodyHere.ignoreExternalWorkbooks") !== "0";
+}
+
+function getAnybodyHereRepoRoot() {
+    return normalizeAnybodyHereWorkbookPath(safeLocalStorageGet("wpsAnybodyHere.repoRoot") || "").replace(/\/$/, "");
+}
+
+function safeLocalStorageGet(key) {
+    try {
+        return window.localStorage.getItem(key);
+    } catch {
+        return "";
+    }
+}
+
+function getActiveWorkbookFullName() {
+    try {
+        const workbook = window.Application && window.Application.ActiveWorkbook;
+        if (!workbook) {
+            return "";
+        }
+
+        return String(workbook.FullName || joinAnybodyHerePath(workbook.Path || "", workbook.Name || "") || "");
+    } catch {
+        return "";
+    }
+}
+
+function joinAnybodyHerePath(path, name) {
+    if (!path) {
+        return name;
+    }
+
+    return `${String(path).replace(/[\\\/]+$/, "")}/${name}`;
+}
+
+function normalizeAnybodyHereWorkbookPath(path) {
+    return String(path || "").replace(/\\/g, "/").replace(/\/+/g, "/");
+}
+
+function isPathInAnybodyHereRepoRoot(fullName, root) {
+    const normalized = normalizeAnybodyHereWorkbookPath(fullName).toLowerCase();
+    const normalizedRoot = normalizeAnybodyHereWorkbookPath(root).replace(/\/$/, "").toLowerCase();
+    return Boolean(normalized && normalizedRoot && normalized.indexOf(normalizedRoot + "/") === 0);
 }
 
 function GetImage() {

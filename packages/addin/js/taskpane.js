@@ -6,6 +6,7 @@
         repoUrl: "wpsAnybodyHere.repoUrl",
         repoRoot: "wpsAnybodyHere.repoRoot",
         highlightRemoteCells: "wpsAnybodyHere.highlightRemoteCells",
+        ignoreExternalWorkbooks: "wpsAnybodyHere.ignoreExternalWorkbooks",
         settingsSaved: "wpsAnybodyHere.settingsSaved",
     };
 
@@ -65,6 +66,7 @@
     let roomId = "";
     let workbookName = "";
     let workbookFullName = "";
+    let activeWorkbookIgnored = false;
     let myUser = null;
     let pendingColorMode = "auto";
     let pendingCustomColor = "";
@@ -316,6 +318,10 @@
         return localStorage.getItem(STORAGE_KEYS.highlightRemoteCells) !== "0";
     }
 
+    function shouldIgnoreExternalWorkbooks() {
+        return localStorage.getItem(STORAGE_KEYS.ignoreExternalWorkbooks) !== "0";
+    }
+
     function setSettingsError(message) {
         const el = $("settingsError");
         if (!el) {
@@ -342,6 +348,7 @@
         $("repoRootInput").value = firstRun ? "" : getRepoRoot();
         $("userNameInput").value = savedUser ? savedUser.userName : getWpsUserName();
         $("highlightRemoteCellsInput").checked = isRemoteCellHighlightEnabled();
+        $("ignoreExternalWorkbooksInput").checked = shouldIgnoreExternalWorkbooks();
         syncColorDraftFromUser(savedUser);
         renderUserColorControls();
         modal.dataset.force = force ? "true" : "false";
@@ -369,6 +376,7 @@
         const repoRoot = normalizeWorkbookPath($("repoRootInput").value.trim()).replace(/\/$/, "");
         const userName = $("userNameInput").value.trim();
         const highlightRemoteCells = $("highlightRemoteCellsInput").checked;
+        const ignoreExternalWorkbooks = $("ignoreExternalWorkbooksInput").checked;
 
         if (!serverUrl) {
             setSettingsError("请填写服务器 socket 地址。");
@@ -391,11 +399,13 @@
         const oldRepoUrl = getRepoUrl();
         const oldRepoRoot = getRepoRoot();
         const oldHighlightRemoteCells = isRemoteCellHighlightEnabled();
+        const oldIgnoreExternalWorkbooks = shouldIgnoreExternalWorkbooks();
 
         localStorage.setItem(STORAGE_KEYS.serverUrl, serverUrl);
         localStorage.setItem(STORAGE_KEYS.repoUrl, repoUrl);
         localStorage.setItem(STORAGE_KEYS.repoRoot, repoRoot);
         localStorage.setItem(STORAGE_KEYS.highlightRemoteCells, highlightRemoteCells ? "1" : "0");
+        localStorage.setItem(STORAGE_KEYS.ignoreExternalWorkbooks, ignoreExternalWorkbooks ? "1" : "0");
         localStorage.setItem(STORAGE_KEYS.settingsSaved, "1");
         $("serverUrlInput").value = serverUrl;
         $("repoUrlInput").value = repoUrl;
@@ -420,7 +430,7 @@
         }
 
         if (joined) {
-            if (oldRepoUrl !== repoUrl || oldRepoRoot !== repoRoot) {
+            if (oldRepoUrl !== repoUrl || oldRepoRoot !== repoRoot || oldIgnoreExternalWorkbooks !== ignoreExternalWorkbooks) {
                 restartWorkbookConnections();
             } else if (oldServerUrl !== serverUrl) {
                 for (const connection of roomConnections.values()) {
@@ -508,7 +518,7 @@
             }
 
             const info = getWorkbookInfoFromWorkbook(workbook);
-            const id = makeRoomId(info.fullName);
+            const id = normalizeWorkbookPath(info.fullName).toLowerCase();
             if (seen.has(id)) {
                 continue;
             }
@@ -575,7 +585,27 @@
         return normalized.slice(root.length + 1);
     }
 
+    function isWorkbookInRepoRoot(fullName) {
+        const normalized = normalizeWorkbookPath(fullName);
+        const root = getRepoRoot();
+        if (!normalized || !root) {
+            return false;
+        }
+
+        const normalizedLower = normalized.toLowerCase();
+        const rootLower = root.toLowerCase();
+        return normalizedLower.indexOf(rootLower + "/") === 0;
+    }
+
+    function shouldSyncWorkbook(fullName) {
+        return !shouldIgnoreExternalWorkbooks() || isWorkbookInRepoRoot(fullName);
+    }
+
     function makeRoomId(fullName) {
+        if (!shouldSyncWorkbook(fullName)) {
+            return "";
+        }
+
         const fileId = getRepoRelativePath(fullName) || normalizeWorkbookPath(fullName);
         const repoUrl = getRepoUrl();
         return (repoUrl ? `${repoUrl}::${fileId}` : fileId).toLowerCase();
@@ -639,6 +669,7 @@
         roomId = "";
         workbookName = "";
         workbookFullName = "";
+        activeWorkbookIgnored = false;
         remoteSelections.clear();
         conflicts = [];
         currentUsers = [];
@@ -665,6 +696,7 @@
         roomId = "";
         workbookName = "";
         workbookFullName = "";
+        activeWorkbookIgnored = false;
         remoteSelections.clear();
         conflicts = [];
         currentUsers = [];
@@ -681,12 +713,17 @@
         }
 
         const activeInfo = getWorkbookInfo();
-        const activeRoomId = makeRoomId(activeInfo.fullName);
-        const infos = listOpenWorkbookInfos();
+        const activeAllowed = shouldSyncWorkbook(activeInfo.fullName);
+        const infos = listOpenWorkbookInfos().filter(function (info) {
+            return shouldSyncWorkbook(info.fullName);
+        });
         const openRoomIds = new Set();
 
         for (const info of infos) {
             const nextRoomId = makeRoomId(info.fullName);
+            if (!nextRoomId) {
+                continue;
+            }
             openRoomIds.add(nextRoomId);
 
             let connection = roomConnections.get(nextRoomId);
@@ -711,7 +748,11 @@
             }
         }
 
-        setActiveWorkbook(activeInfo);
+        if (activeAllowed) {
+            setActiveWorkbook(activeInfo);
+        } else {
+            setIgnoredActiveWorkbook(activeInfo);
+        }
         updateServerStatus();
     }
 
@@ -736,6 +777,7 @@
         roomId = nextRoomId;
         workbookName = info.name;
         workbookFullName = info.fullName;
+        activeWorkbookIgnored = false;
 
         const workbookBox = $("workbookName");
         workbookBox.textContent = workbookName;
@@ -744,6 +786,30 @@
 
         if (changed) {
             log(`当前表格切换为：${workbookName}`);
+        }
+
+        renderActiveRoomState();
+    }
+
+    function setIgnoredActiveWorkbook(info) {
+        const changed = roomId || workbookFullName !== info.fullName || !activeWorkbookIgnored;
+
+        roomId = "";
+        workbookName = info.name;
+        workbookFullName = info.fullName;
+        activeWorkbookIgnored = true;
+        remoteSelections.clear();
+        conflicts = [];
+        currentUsers = [];
+
+        const workbookBox = $("workbookName");
+        workbookBox.textContent = `${workbookName}（已忽略）`;
+        workbookBox.title = workbookFullName;
+        workbookBox.classList.remove("muted");
+
+        if (changed) {
+            cleanupWorkbookHighlights();
+            log(`已忽略本地根目录外的表：${workbookName}`);
         }
 
         renderActiveRoomState();
@@ -1147,6 +1213,11 @@
     function updateServerStatus() {
         if (!joined) {
             setServerStatus("connecting", "正在自动加入协作...");
+            return;
+        }
+
+        if (activeWorkbookIgnored) {
+            setServerStatus("offline", "已忽略本地根目录外的表");
             return;
         }
 
@@ -2938,7 +3009,11 @@
 
         joinRoom().then(function () {
             stopAutoJoinRetry();
-            log("已自动加入当前表格房间");
+            if (activeWorkbookIgnored) {
+                logAutoJoinMessage("当前表格不在本地仓库根目录内，已跳过自动协作。");
+            } else {
+                log("已自动加入当前表格房间");
+            }
         }).catch(function (err) {
             const message = err.message || String(err);
             logAutoJoinMessage(`自动加入未完成：${message}`);
