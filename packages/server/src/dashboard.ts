@@ -227,6 +227,27 @@ export function renderDashboardHtml() {
             border-bottom: 1px solid #edf1f7;
             font-weight: 800;
         }
+        .contrib-tabs {
+            display: inline-flex;
+            gap: 6px;
+        }
+        .contrib-tab {
+            min-height: 24px;
+            padding: 0 9px;
+            border: 1px solid #d0d7de;
+            border-radius: 999px;
+            background: #fff;
+            color: #667085;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1;
+        }
+        .contrib-tab.is-active {
+            border-color: #2563eb;
+            background: #eff6ff;
+            color: #1d4ed8;
+        }
         .panel-body {
             padding: 12px 14px;
         }
@@ -343,8 +364,11 @@ export function renderDashboardHtml() {
             </div>
             <div class="panel">
                 <div class="panel-title">
-                    <span>编辑贡献度</span>
-                    <span class="pill">内存统计</span>
+                    <span>编辑贡献排行榜（Top 10）</span>
+                    <div class="contrib-tabs" role="tablist" aria-label="编辑贡献时间范围">
+                        <button type="button" class="contrib-tab is-active" data-window="recent7Days">最近7天</button>
+                        <button type="button" class="contrib-tab" data-window="recent30Days">最近30天</button>
+                    </div>
                 </div>
                 <div id="contributions" class="panel-body"></div>
             </div>
@@ -383,6 +407,15 @@ chmod +x mac-install.sh
     </div>
     <script>
         const fmtTime = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        const contributionLabels = {
+            recent7Days: "最近7天",
+            recent30Days: "最近30天",
+        };
+        let activeContributionWindow = "recent7Days";
+        let contributionRankings = {
+            recent7Days: [],
+            recent30Days: [],
+        };
 
         function escapeHtml(value) {
             return String(value ?? "").replace(/[&<>"']/g, ch => ({
@@ -461,7 +494,7 @@ chmod +x mac-install.sh
             const max = Math.max(1, ...items.map(item => item.editCount));
 
             if (!items.length) {
-                root.innerHTML = '<div class="empty">暂无编辑记录</div>';
+                root.innerHTML = '<div class="empty">' + contributionLabels[activeContributionWindow] + " 暂无编辑记录</div>";
                 return;
             }
 
@@ -478,6 +511,25 @@ chmod +x mac-install.sh
             \`).join("");
         }
 
+        function setContributionWindow(windowKey) {
+            if (!contributionLabels[windowKey]) {
+                return;
+            }
+            activeContributionWindow = windowKey;
+            document.querySelectorAll(".contrib-tab").forEach(button => {
+                button.classList.toggle("is-active", button.getAttribute("data-window") === windowKey);
+            });
+            renderContributions(contributionRankings[windowKey] || []);
+        }
+
+        function setupContributionTabs() {
+            document.querySelectorAll(".contrib-tab").forEach(button => {
+                button.addEventListener("click", () => {
+                    setContributionWindow(button.getAttribute("data-window") || "recent7Days");
+                });
+            });
+        }
+
         async function refresh() {
             try {
                 const res = await fetch("/api/state", { cache: "no-store" });
@@ -488,7 +540,15 @@ chmod +x mac-install.sh
                 document.getElementById("conflictCount").textContent = data.totalConflictCount;
                 document.getElementById("updatedAt").textContent = "刷新于 " + time(data.generatedAt);
                 renderRooms(data.rooms);
-                renderContributions(data.contributions);
+                contributionRankings = {
+                    recent7Days: Array.isArray(data.contributionRankings?.recent7Days)
+                        ? data.contributionRankings.recent7Days
+                        : (Array.isArray(data.contributions) ? data.contributions : []),
+                    recent30Days: Array.isArray(data.contributionRankings?.recent30Days)
+                        ? data.contributionRankings.recent30Days
+                        : [],
+                };
+                setContributionWindow(activeContributionWindow);
             } catch (err) {
                 document.getElementById("updatedAt").textContent = "读取失败：" + (err.message || err);
             }
@@ -555,6 +615,7 @@ chmod +x mac-install.sh
         }
 
         setupMacInstallModal();
+        setupContributionTabs();
         setupInstallLink();
         refresh();
         setInterval(refresh, 2000);

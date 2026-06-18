@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { WebSocket, type RawData } from "ws";
 import {
     type CellChangeMsg,
@@ -28,6 +30,22 @@ function makeEditKey(sheetName: string, address: string, rowId?: string, fieldNa
 
 const CHANGE_VALUE_LIMIT = 1000;
 const MAX_CLIENT_MESSAGE_BYTES = 128 * 1024;
+const CONTRIBUTION_STORAGE_FILE = process.env.CONTRIBUTION_STORAGE_FILE ||
+    path.resolve(process.cwd(), ".data", "dashboard-contributions.json");
+const CONTRIBUTION_FLUSH_DELAY_MS = 1000;
+const CONTRIBUTION_TOP_LIMIT = 10;
+const MAX_DAILY_CONTRIBUTION_BUCKETS = 4000;
+
+interface PersistentContribution {
+    userId: string;
+    userName: string;
+    color: string;
+    lastWorkbookName: string;
+    lastEditedAt: number;
+    lastSheetName: string;
+    lastAddress: string;
+    dailyCounts: Record<string, number>;
+}
 
 function getRawDataByteLength(raw: RawData) {
     if (Array.isArray(raw)) {
@@ -67,6 +85,12 @@ interface DashboardContribution extends ContributionInfo {
 export class RoomManager {
     private readonly rooms = new Map<string, Room>();
     private readonly clientMap = new Map<WebSocket, ClientInfo>();
+    private readonly persistentContributions = new Map<string, PersistentContribution>();
+    private contributionFlushTimer: NodeJS.Timeout | null = null;
+
+    constructor() {
+        this.loadPersistentContributions();
+    }
 
     get roomCount() {
         return this.rooms.size;
@@ -126,19 +150,24 @@ export class RoomManager {
             }
         }
 
-        const contributions = Array.from(globalContributionMap.values())
+        const liveContributions = Array.from(globalContributionMap.values())
             .sort((a, b) => b.editCount - a.editCount || b.lastEditedAt - a.lastEditedAt);
+        const contributionRankings = {
+            recent7Days: this.getContributionLeaderboard(7),
+            recent30Days: this.getContributionLeaderboard(30),
+        };
 
         return {
             generatedAt: Date.now(),
             roomCount: rooms.length,
             clientCount: uniqueUsers.length,
             connectionCount: this.clientMap.size,
-            totalEditCount: contributions.reduce((sum, item) => sum + item.editCount, 0),
+            totalEditCount: liveContributions.reduce((sum, item) => sum + item.editCount, 0),
             totalConflictCount: rooms.reduce((sum, room) => sum + room.conflictCount, 0),
             users: uniqueUsers,
             rooms,
-            contributions,
+            contributions: contributionRankings.recent7Days,
+            contributionRankings,
         };
     }
 
@@ -391,6 +420,7 @@ export class RoomManager {
 
         room.updatedAt = client.lastHeartbeatAt;
         this.updateRoomUserDisplay(room, client);
+        this.updatePersistentUserDisplay(client);
 
         this.broadcast(room, {
             type: "presence",
@@ -490,6 +520,7 @@ export class RoomManager {
         room.changes.set(key, list);
         room.updatedAt = now;
         this.recordContribution(room, client, sheetName, address, now);
+        this.recordPersistentContribution(client, sheetName, address, now);
 
         this.broadcast(room, {
             type: "cellChange",
@@ -678,6 +709,192 @@ export class RoomManager {
         current.lastEditedAt = now;
         current.lastSheetName = sheetName;
         current.lastAddress = address;
+    }
+
+    private updatePersistentUserDisplay(client: ClientInfo) {
+        const contribution = this.persistentContributions.get(client.userId);
+        if (!contribution) {
+            return;
+        }
+
+        contribution.userName = client.userName;
+        contribution.color = client.color;
+        contribution.lastWorkbookName = client.workbookName;
+        this.scheduleContributionFlush();
+    }
+
+    private recordPersistentContribution(client: ClientInfo, sheetName: string, address: string, now: number) {
+        const current = this.persistentContributions.get(client.userId) || {
+            userId: client.userId,
+            userName: client.userName,
+            color: client.color,
+            lastWorkbookName: client.workbookName,
+            lastEditedAt: now,
+            lastSheetName: sheetName,
+            lastAddress: address,
+            dailyCounts: {},
+        };
+        const dayKey = this.toUtcDayKey(now);
+        current.userName = client.userName;
+        current.color = client.color;
+        current.lastWorkbookName = client.workbookName;
+        current.lastEditedAt = now;
+        current.lastSheetName = sheetName;
+        current.lastAddress = address;
+        current.dailyCounts[dayKey] = (current.dailyCounts[dayKey] || 0) + 1;
+        this.trimDailyCounts(current);
+        this.persistentContributions.set(client.userId, current);
+        this.scheduleContributionFlush();
+    }
+
+    private getContributionLeaderboard(days: number): DashboardContribution[] {
+        const dayKeys = new Set(this.recentDayKeys(days));
+        const ranked: DashboardContribution[] = [];
+
+        for (const contribution of this.persistentContributions.values()) {
+            let editCount = 0;
+            for (const [dayKey, count] of Object.entries(contribution.dailyCounts)) {
+                if (dayKeys.has(dayKey)) {
+                    editCount += count;
+                }
+            }
+
+            if (editCount <= 0) {
+                continue;
+            }
+
+            ranked.push({
+                userId: contribution.userId,
+                userName: contribution.userName,
+                color: contribution.color,
+                editCount,
+                lastEditedAt: contribution.lastEditedAt,
+                lastSheetName: contribution.lastSheetName,
+                lastAddress: contribution.lastAddress,
+                roomId: "",
+                workbookName: contribution.lastWorkbookName || "未知表格",
+            });
+        }
+
+        return ranked
+            .sort((a, b) => b.editCount - a.editCount || b.lastEditedAt - a.lastEditedAt)
+            .slice(0, CONTRIBUTION_TOP_LIMIT);
+    }
+
+    private toUtcDayKey(timestamp: number) {
+        return new Date(timestamp).toISOString().slice(0, 10);
+    }
+
+    private recentDayKeys(days: number) {
+        const keys: string[] = [];
+        const now = new Date();
+        const utcYear = now.getUTCFullYear();
+        const utcMonth = now.getUTCMonth();
+        const utcDate = now.getUTCDate();
+
+        for (let offset = 0; offset < days; offset += 1) {
+            const date = new Date(Date.UTC(utcYear, utcMonth, utcDate - offset));
+            keys.push(this.toUtcDayKey(date.getTime()));
+        }
+
+        return keys;
+    }
+
+    private trimDailyCounts(contribution: PersistentContribution) {
+        const keys = Object.keys(contribution.dailyCounts).sort();
+        const overflow = keys.length - MAX_DAILY_CONTRIBUTION_BUCKETS;
+        if (overflow <= 0) {
+            return;
+        }
+
+        for (const dayKey of keys.slice(0, overflow)) {
+            delete contribution.dailyCounts[dayKey];
+        }
+    }
+
+    private loadPersistentContributions() {
+        try {
+            const raw = fs.readFileSync(CONTRIBUTION_STORAGE_FILE, "utf8");
+            const parsed: unknown = JSON.parse(raw);
+            const users = this.asRecord(parsed).users;
+
+            if (!Array.isArray(users)) {
+                return;
+            }
+
+            for (const item of users) {
+                const record = this.asRecord(item);
+                const userId = this.normalizeText(record.userId);
+                if (!userId) {
+                    continue;
+                }
+
+                const dailyCountsRaw = this.asRecord(record.dailyCounts);
+                const dailyCounts: Record<string, number> = {};
+                for (const [dayKey, value] of Object.entries(dailyCountsRaw)) {
+                    if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) {
+                        continue;
+                    }
+                    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+                        continue;
+                    }
+                    dailyCounts[dayKey] = Math.floor(value);
+                }
+
+                const contribution: PersistentContribution = {
+                    userId,
+                    userName: this.normalizeText(record.userName) || "未命名用户",
+                    color: this.normalizeColor(record.color) || "#4E7FFF",
+                    lastWorkbookName: this.normalizeText(record.lastWorkbookName) || "未知表格",
+                    lastEditedAt: typeof record.lastEditedAt === "number" && Number.isFinite(record.lastEditedAt)
+                        ? Math.floor(record.lastEditedAt)
+                        : 0,
+                    lastSheetName: this.normalizeText(record.lastSheetName) || "未知工作表",
+                    lastAddress: this.normalizeText(record.lastAddress) || "未知单元格",
+                    dailyCounts,
+                };
+                this.trimDailyCounts(contribution);
+                this.persistentContributions.set(userId, contribution);
+            }
+        } catch {
+            // Ignore malformed/missing persistence file.
+        }
+    }
+
+    private scheduleContributionFlush() {
+        if (this.contributionFlushTimer) {
+            return;
+        }
+
+        this.contributionFlushTimer = setTimeout(() => {
+            this.contributionFlushTimer = null;
+            this.flushPersistentContributions();
+        }, CONTRIBUTION_FLUSH_DELAY_MS);
+    }
+
+    private flushPersistentContributions() {
+        try {
+            const directory = path.dirname(CONTRIBUTION_STORAGE_FILE);
+            fs.mkdirSync(directory, { recursive: true });
+
+            const payload = {
+                version: 1,
+                updatedAt: Date.now(),
+                users: Array.from(this.persistentContributions.values()),
+            };
+            const tempFile = `${CONTRIBUTION_STORAGE_FILE}.tmp`;
+            fs.writeFileSync(tempFile, JSON.stringify(payload, null, 2), "utf8");
+            fs.renameSync(tempFile, CONTRIBUTION_STORAGE_FILE);
+        } catch {
+            // Ignore persistence failures to avoid affecting realtime collaboration.
+        }
+    }
+
+    private asRecord(value: unknown): Record<string, unknown> {
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+            return value as Record<string, unknown>;
+        }
+        return {};
     }
 
     private normalizeText(value: unknown) {
